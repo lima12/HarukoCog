@@ -1,0 +1,115 @@
+# HarukoCog
+
+Redbot cog repository containing BattleMetric and VoiceChannelHandling.
+
+Replace `[p]` in every command below with your bot's command prefix. Repository
+and cog installation commands must be run by a bot owner.
+
+## Install From GitHub
+
+Load Red's Downloader cog if it is not already loaded:
+
+```text
+[p]load downloader
+```
+
+Add this repository once:
+
+```text
+[p]repo add HarukoCog https://github.com/lima12/HarukoCog.git main
+```
+
+Install and load either cog:
+
+```text
+[p]cog install HarukoCog BattleMetric
+[p]load BattleMetric
+```
+
+```text
+[p]cog install HarukoCog VoiceChannelHandling
+[p]load VoiceChannelHandling
+```
+
+To install both at once:
+
+```text
+[p]cog install HarukoCog BattleMetric VoiceChannelHandling
+[p]load BattleMetric
+[p]load VoiceChannelHandling
+```
+
+Use `[p]cog list HarukoCog` to see the cogs available from this repository.
+
+## BattleMetric
+
+BattleMetric reads server data from the BattleMetrics API and can maintain a
+Server Info embed that refreshes every 60 seconds.
+
+After loading, configure the API token as the bot owner in a private channel or
+DM:
+
+```text
+[p]set api battlemetrics api_key,YOUR_TOKEN
+```
+
+Then a server manager grants access to the members who should use the cog:
+
+```text
+[p]bm auth add @member
+```
+
+An authorized member can configure a default BattleMetrics server and create a
+Server Info panel:
+
+```text
+[p]bm setserver SERVER_ID
+[p]serverinfo setup #server-status
+```
+
+See [BattleMetric/README.md](BattleMetric/README.md) for all commands and
+authorization details.
+
+## VoiceChannelHandling
+
+VoiceChannelHandling creates a temporary voice room when a member joins a
+configured creator channel. Before setup, ensure the bot can manage channels,
+move members, and send messages in voice-channel chat when dashboard panels are
+wanted.
+
+After loading, configure it with:
+
+```text
+/setupvch creator_room:<voice channel> delete_delay:<seconds> category:<optional category> name_template:<optional template>
+```
+
+Example:
+
+```text
+/setupvch creator_room:"Join to Create" delete_delay:10 category:"Temporary Voice" name_template:"{user}'s room"
+```
+
+See [VoiceChannelHandling/README.md](VoiceChannelHandling/README.md) for its
+permissions model, dashboard controls, and troubleshooting.
+
+## Local Development Install
+
+When testing this checkout directly rather than installing from GitHub, add the
+folder that contains the cog packages, then load the cog:
+
+```text
+[p]addpath "C:\\Users\\igiha\\Desktop\\discord bot\\slh\\redcog\\HarukoCog"
+[p]load BattleMetric
+```
+
+Replace the path with the location of your local `HarukoCog` folder. Load
+`VoiceChannelHandling` instead when testing that cog.
+
+## Updating
+
+Update the repository and installed cogs with:
+
+```text
+[p]repo update HarukoCog
+[p]cog update HarukoCog
+```

@@ -1,0 +1,11 @@
+{
+  "author": ["Haruko"],
+  "name": "VoiceChannelHandling",
+  "short": "Temporary join-to-create voice channels with owner controls.",
+  "description": "Creates and manages temporary Discord voice channels, including an in-channel dashboard for room owners.",
+  "install_msg": "VoiceChannelHandling loaded. Use /setupvch to configure a creator voice channel.",
+  "requirements": [],
+  "tags": ["voice", "temporary-channels", "join-to-create", "dashboard"],
+  "min_bot_version": "3.5.0",
+  "end_user_data_statement": "Stores per-guild temporary voice channel settings and mappings that include Discord channel, message, and user IDs."
+}
