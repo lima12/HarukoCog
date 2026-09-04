@@ -6,6 +6,11 @@ from discord import app_commands
 from redbot.core import commands
 
 from .api import BattleMetricsAPIError
+from .authorization import (
+    requires_authorization_manager,
+    requires_authorized_user,
+    requires_battlemetric_access,
+)
 
 
 class BattleMetricCommandsMixin:
@@ -13,12 +18,14 @@ class BattleMetricCommandsMixin:
 
     @commands.hybrid_group(name="battlemetric", aliases=["bm"], invoke_without_command=True)
     @commands.guild_only()
+    @requires_battlemetric_access()
     async def battlemetric(self, ctx: commands.Context):
         """Show BattleMetric configuration for this server."""
         await self._send_bm_status(ctx)
 
     @battlemetric.command(name="status")
     @commands.guild_only()
+    @requires_authorized_user()
     async def bm_status(self, ctx: commands.Context):
         """Show BattleMetric configuration for this server."""
         await self._send_bm_status(ctx)
@@ -39,35 +46,62 @@ class BattleMetricCommandsMixin:
 
         await ctx.send("BattleMetric settings:\n" + "\n".join(f"- {line}" for line in lines))
 
-    @battlemetric.command(name="settoken")
-    @commands.is_owner()
-    async def bm_set_token(self, ctx: commands.Context, *, token: str):
-        """Store the BattleMetrics API bearer token globally for this bot."""
-        token = token.strip()
-        if not token:
-            await ctx.send("Token cannot be empty.")
+    @battlemetric.group(name="auth", invoke_without_command=True)
+    @commands.guild_only()
+    @requires_authorization_manager()
+    async def bm_auth(self, ctx: commands.Context):
+        """Manage members allowed to use BattleMetric commands in this guild."""
+        await self._send_authorized_users(ctx)
+
+    @bm_auth.command(name="add")
+    @requires_authorization_manager()
+    async def bm_auth_add(self, ctx: commands.Context, member: discord.Member):
+        """Authorize a member to use BattleMetric commands in this guild."""
+        if ctx.guild is None:
             return
 
-        await self.set_api_token(token)
+        added = await self.add_authorized_user(ctx.guild, member.id)
+        if not added:
+            await ctx.send(f"{member.mention} is already authorized.")
+            return
+        await ctx.send(f"Authorized {member.mention} for BattleMetric commands.")
 
-        try:
-            await ctx.message.delete()
-        except (discord.Forbidden, discord.HTTPException, AttributeError):
-            pass
+    @bm_auth.command(name="remove", aliases=["revoke"])
+    @requires_authorization_manager()
+    async def bm_auth_remove(self, ctx: commands.Context, member: discord.Member):
+        """Remove a member's BattleMetric authorization in this guild."""
+        if ctx.guild is None:
+            return
 
-        await ctx.send("BattleMetrics token saved.", delete_after=20)
+        removed = await self.remove_authorized_user(ctx.guild, member.id)
+        if not removed:
+            await ctx.send(f"{member.mention} is not authorized.")
+            return
+        await ctx.send(f"Removed BattleMetric authorization for {member.mention}.")
 
-    @battlemetric.command(name="cleartoken")
-    @commands.is_owner()
-    async def bm_clear_token(self, ctx: commands.Context):
-        """Remove the stored BattleMetrics API token."""
-        await self.set_api_token(None)
-        await ctx.send("BattleMetrics token cleared.")
+    @bm_auth.command(name="list")
+    @requires_authorization_manager()
+    async def bm_auth_list(self, ctx: commands.Context):
+        """List members authorized to use BattleMetric commands in this guild."""
+        await self._send_authorized_users(ctx)
+
+    async def _send_authorized_users(self, ctx: commands.Context) -> None:
+        if ctx.guild is None:
+            return
+
+        authorized_user_ids = sorted(await self.get_authorized_user_ids(ctx.guild))
+        if not authorized_user_ids:
+            await ctx.send("No members are authorized. Use `battlemetric auth add @member`.")
+            return
+
+        members = [ctx.guild.get_member(member_id) for member_id in authorized_user_ids]
+        labels = [member.mention if member else f"Unknown user (`{member_id}`)" for member_id, member in zip(authorized_user_ids, members)]
+        await ctx.send("Authorized BattleMetric users:\n" + "\n".join(f"- {label}" for label in labels))
 
     @battlemetric.command(name="setserver")
     @app_commands.describe(server_id="BattleMetrics server ID to use by default.")
     @commands.guild_only()
-    @commands.admin_or_permissions(manage_guild=True)
+    @requires_authorized_user()
     async def bm_set_server(self, ctx: commands.Context, server_id: str):
         """Set the default BattleMetrics server ID for this Discord server."""
         if ctx.guild is None:
@@ -78,7 +112,7 @@ class BattleMetricCommandsMixin:
 
     @battlemetric.command(name="clearserver")
     @commands.guild_only()
-    @commands.admin_or_permissions(manage_guild=True)
+    @requires_authorized_user()
     async def bm_clear_server(self, ctx: commands.Context):
         """Clear the default BattleMetrics server ID for this Discord server."""
         if ctx.guild is None:
@@ -90,7 +124,7 @@ class BattleMetricCommandsMixin:
     @battlemetric.command(name="setgame")
     @app_commands.describe(game="BattleMetrics game slug such as rust, ark, squad, dayz, or arma3.")
     @commands.guild_only()
-    @commands.admin_or_permissions(manage_guild=True)
+    @requires_authorized_user()
     async def bm_set_game(self, ctx: commands.Context, game: str):
         """Set the default BattleMetrics game filter for server searches."""
         if ctx.guild is None:
@@ -101,7 +135,7 @@ class BattleMetricCommandsMixin:
 
     @battlemetric.command(name="cleargame")
     @commands.guild_only()
-    @commands.admin_or_permissions(manage_guild=True)
+    @requires_authorized_user()
     async def bm_clear_game(self, ctx: commands.Context):
         """Clear the default BattleMetrics game filter for this Discord server."""
         if ctx.guild is None:
@@ -113,6 +147,7 @@ class BattleMetricCommandsMixin:
     @battlemetric.command(name="server")
     @app_commands.describe(server_id="Optional BattleMetrics server ID. Uses the configured default when omitted.")
     @commands.guild_only()
+    @requires_authorized_user()
     async def bm_server(self, ctx: commands.Context, server_id: Optional[str] = None):
         """Fetch a BattleMetrics server and show common status data."""
         if ctx.guild is None:
@@ -143,6 +178,7 @@ class BattleMetricCommandsMixin:
         limit="Number of results to show, from 1 to 10.",
     )
     @commands.guild_only()
+    @requires_authorized_user()
     async def bm_search(
         self,
         ctx: commands.Context,
@@ -198,6 +234,7 @@ class BattleMetricCommandsMixin:
     @battlemetric.command(name="player")
     @app_commands.describe(player_id="BattleMetrics player ID.")
     @commands.guild_only()
+    @requires_authorized_user()
     async def bm_player(self, ctx: commands.Context, player_id: str):
         """Fetch a BattleMetrics player by ID."""
         try:
@@ -231,6 +268,7 @@ class BattleMetricCommandsMixin:
         params_json="Optional JSON object for query parameters.",
     )
     @commands.is_owner()
+    @requires_authorized_user()
     async def bm_raw_get(
         self,
         ctx: commands.Context,
