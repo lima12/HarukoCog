@@ -1,0 +1,11 @@
+{
+  "author": ["Haruko"],
+  "name": "BattleMetric",
+  "short": "BattleMetrics API helper cog.",
+  "description": "Modular Redbot cog for fetching data from the BattleMetrics API.",
+  "install_msg": "BattleMetric loaded. Use [p]help battlemetric to see commands.",
+  "requirements": ["aiohttp"],
+  "tags": ["battlemetrics", "api", "games", "servers"],
+  "min_bot_version": "3.5.0",
+  "end_user_data_statement": "Stores a global BattleMetrics API token and per-guild BattleMetrics settings. Does not store Discord user data."
+}

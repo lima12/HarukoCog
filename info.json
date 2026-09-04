@@ -1,0 +1,7 @@
+{
+  "author": ["Haruko"],
+  "name": "HarukoCog",
+  "short": "HarukoCog",
+  "description": "Haruko Cog libary",
+  "install_msg": "Haruko's cogs accessed, please use cog list HarukoCog."
+}
