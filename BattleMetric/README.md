@@ -56,7 +56,8 @@ The panel is an embed that refreshes at most once every 60 seconds. It shows the
 server name, address, IP, port, status, player count, and the current player
 names when BattleMetrics returns them. Some games and servers do not expose a
 player list; the panel reports that limitation instead of showing incomplete
-data.
+data. Player names are distributed across two inline columns to show more names
+without making the panel excessively tall.
 
 Each Discord guild has one tracked Server Info panel. Running `setup` creates a
 new panel and replaces the previously tracked one. A panel is pinned to the

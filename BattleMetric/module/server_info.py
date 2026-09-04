@@ -23,6 +23,7 @@ class ServerInfoModule:
     """Maintain one automatically refreshed server-info panel per guild."""
 
     UPDATE_INTERVAL_SECONDS = 60
+    PLAYER_FIELD_VALUE_LIMIT = 1000
     _EMPTY_PANEL = {"channel_id": None, "message_id": None, "server_id": None}
 
     def __init__(self, cog: commands.Cog):
@@ -105,10 +106,10 @@ class ServerInfoModule:
         embed.add_field(name="Port", value=self._code(attrs.get("port") or "unknown"), inline=True)
         embed.add_field(name="Status", value=self._code(status), inline=True)
         embed.add_field(name="Players", value=self._player_count(attrs), inline=True)
-        embed.add_field(
-            name="Online Players",
-            value=self._player_list(self._online_player_names(document, server), attrs.get("players")),
-            inline=False,
+        self._add_player_fields(
+            embed,
+            self._online_player_names(document, server),
+            attrs.get("players"),
         )
         embed.set_footer(text="Updates automatically every 60 seconds")
         return embed
@@ -260,23 +261,52 @@ class ServerInfoModule:
 
         return names if names or has_player_relationship else None
 
-    @staticmethod
-    def _player_list(player_names: Optional[Sequence[str]], player_count: Any) -> str:
+    def _add_player_fields(
+        self,
+        embed: discord.Embed,
+        player_names: Optional[Sequence[str]],
+        player_count: Any,
+    ) -> None:
         if player_names is None:
-            return "Player list is unavailable from BattleMetrics for this server."
+            embed.add_field(
+                name="Online Players",
+                value="Player list is unavailable from BattleMetrics for this server.",
+                inline=False,
+            )
+            return
         if not player_names:
-            return "No players online." if player_count in (0, "0") else "Player names are unavailable."
+            value = "No players online." if player_count in (0, "0") else "Player names are unavailable."
+            embed.add_field(name="Online Players", value=value, inline=False)
+            return
 
-        lines: List[str] = []
-        for index, name in enumerate(player_names):
+        columns: List[List[str]] = [[], []]
+        column_lengths = [0, 0]
+        omitted_count = 0
+        for name in player_names:
             safe_name = discord.utils.escape_markdown(str(name), as_needed=False)[:180]
             entry = f"- {safe_name}"
-            if len("\n".join(lines + [entry])) > 1000:
-                remaining = len(player_names) - index
-                lines.append(f"... and {remaining} more")
-                break
-            lines.append(entry)
-        return "\n".join(lines)[:1024]
+            order = sorted(range(2), key=lambda index: column_lengths[index])
+            for index in order:
+                separator_length = 1 if columns[index] else 0
+                if column_lengths[index] + separator_length + len(entry) <= self.PLAYER_FIELD_VALUE_LIMIT:
+                    columns[index].append(entry)
+                    column_lengths[index] += separator_length + len(entry)
+                    break
+            else:
+                omitted_count += 1
+
+        if omitted_count:
+            suffix = f"... and {omitted_count} more"
+            index = min(range(2), key=lambda column: column_lengths[column])
+            columns[index].append(suffix)
+
+        values = ["\n".join(column) for column in columns if column]
+        if len(values) == 1:
+            embed.add_field(name="Online Players", value=values[0], inline=False)
+            return
+
+        embed.add_field(name="Online Players", value=values[0], inline=True)
+        embed.add_field(name="Online Players (cont.)", value=values[1], inline=True)
 
 
 class ServerInfoCommandsMixin:
