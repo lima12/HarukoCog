@@ -4,7 +4,7 @@
   "short": "BattleMetrics API and HLL: Vietnam RCON helper cog.",
   "description": "Modular Redbot cog for BattleMetrics server data, automatic Server Info panels, and a pooled HLL: Vietnam RCON kill feed.",
   "install_msg": "BattleMetric loaded. Use [p]help battlemetric, [p]help serverinfo, or [p]help killfeed to see commands.",
-  "requirements": ["aiohttp", "hllrcon>=2.0.0.4,<2.0.1"],
+  "requirements": ["aiohttp", "pydantic>=2.11.5,<2.12", "hllrcon>=2.0.0.4,<2.0.1"],
   "tags": ["battlemetrics", "api", "games", "servers", "hll", "rcon"],
   "min_bot_version": "3.5.0",
   "min_python_version": [3, 11, 0],

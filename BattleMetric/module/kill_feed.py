@@ -15,18 +15,27 @@ from collections import OrderedDict, deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import discord
 from discord import app_commands
 from discord.ext import tasks
-from hllrcon import HLLVRcon
-from hllrcon.admin_logs import HLLVPlayerKillAdminLog, HLLVPlayerTeamKillAdminLog
 from redbot.core import commands
 
 from ..authorization import requires_authorized_user
 
 log = logging.getLogger("red.BattleMetric.kill_feed")
+
+try:
+    from hllrcon import HLLVRcon
+    from hllrcon.admin_logs import HLLVPlayerKillAdminLog, HLLVPlayerTeamKillAdminLog
+except Exception as exc:  # noqa: BLE001 - keep unrelated BattleMetric modules loadable
+    HLLVRcon = None
+    HLLVPlayerKillAdminLog = None
+    HLLVPlayerTeamKillAdminLog = None
+    HLLRCON_IMPORT_ERROR: Exception | None = exc
+else:
+    HLLRCON_IMPORT_ERROR = None
 
 
 @dataclass(frozen=True)
@@ -62,7 +71,7 @@ class KillFeedModule:
     def __init__(self, cog: commands.Cog):
         self.cog = cog
         self._password: str | None = None
-        self._clients: dict[int, tuple[tuple[str, int, str], HLLVRcon]] = {}
+        self._clients: dict[int, tuple[tuple[str, int, str], Any]] = {}
         self._client_locks: dict[int, asyncio.Lock] = {}
         self._queues: dict[int, deque[KillFeedEvent]] = {}
         self._seen: dict[int, OrderedDict[str, None]] = {}
@@ -76,6 +85,12 @@ class KillFeedModule:
 
     async def start(self) -> None:
         await self.refresh_password()
+        if not self.is_available():
+            log.error(
+                "HLL: Vietnam kill feed is unavailable because hllrcon could not be imported: %s",
+                HLLRCON_IMPORT_ERROR,
+            )
+            return
         if not self.log_poller.is_running():
             self.log_poller.start()
         if not self.queue_worker.is_running():
@@ -99,6 +114,14 @@ class KillFeedModule:
 
     def has_password(self) -> bool:
         return bool(self._password)
+
+    @staticmethod
+    def is_available() -> bool:
+        return HLLRCON_IMPORT_ERROR is None
+
+    @staticmethod
+    def dependency_error() -> str | None:
+        return str(HLLRCON_IMPORT_ERROR) if HLLRCON_IMPORT_ERROR is not None else None
 
     async def get_settings(
         self,
@@ -154,6 +177,8 @@ class KillFeedModule:
         self._dropped_counts.pop(guild_id, None)
 
     async def test_connection(self, guild: discord.Guild) -> None:
+        if not self.is_available():
+            raise RuntimeError("The hllrcon dependency is unavailable.")
         settings = await self.get_settings(guild)
         host = settings.get("host")
         port = settings.get("port")
@@ -192,7 +217,7 @@ class KillFeedModule:
         await self.cog.bot.wait_until_ready()
 
     async def _poll_all_guilds(self) -> None:
-        if not self._password:
+        if not self.is_available() or not self._password:
             return
 
         coroutines = []
@@ -312,7 +337,9 @@ class KillFeedModule:
         host: str,
         port: int,
         password: str,
-    ) -> tuple[HLLVRcon, asyncio.Lock]:
+    ) -> tuple[Any, asyncio.Lock]:
+        if HLLVRcon is None:
+            raise RuntimeError("The hllrcon dependency is unavailable.")
         signature = (host, port, password)
         state = self._clients.get(guild_id)
         if state is None or state[0] != signature:
@@ -382,9 +409,12 @@ class KillFeedModule:
     @classmethod
     def _format_event(
         cls,
-        entry: HLLVPlayerKillAdminLog | HLLVPlayerTeamKillAdminLog,
+        entry: Any,
     ) -> KillFeedEvent:
-        team_kill = isinstance(entry, HLLVPlayerTeamKillAdminLog)
+        team_kill = HLLVPlayerTeamKillAdminLog is not None and isinstance(
+            entry,
+            HLLVPlayerTeamKillAdminLog,
+        )
         action = "team-killed" if team_kill else "killed"
         attacker = cls._safe_text(entry.instigator_name, 80)
         victim = cls._safe_text(entry.victim_name, 80)
@@ -458,6 +488,12 @@ class KillFeedCommandsMixin:
             return
 
         settings = await self.kill_feed.get_settings(ctx.guild)
+        if not self.kill_feed.is_available():
+            await ctx.send(
+                "The `hllrcon` dependency could not be loaded. Ask the bot owner to "
+                "update the cog dependencies and restart Red."
+            )
+            return
         if not settings.get("host") or not settings.get("port"):
             await ctx.send("Configure the RCON endpoint first with `killfeed configure <host> <port>`.")
             return
@@ -535,6 +571,7 @@ class KillFeedCommandsMixin:
         queue_size = self.kill_feed.queue_size(ctx.guild.id)
         lines = [
             f"Enabled: `{'yes' if settings.get('enabled') else 'no'}`",
+            f"hllrcon dependency: `{'ready' if self.kill_feed.is_available() else 'unavailable'}`",
             f"Channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'not configured'}",
             f"RCON endpoint: {endpoint}",
             f"RCON password: `{'configured' if self.kill_feed.has_password() else 'not configured'}`",

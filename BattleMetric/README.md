@@ -83,11 +83,13 @@ from Discord and then restart Red:
 
 ```text
 [p]load downloader
-[p]pipinstall "hllrcon>=2.0.0.4,<2.0.1"
+[p]pipinstall "pydantic>=2.11.5,<2.12" "hllrcon>=2.0.0.4,<2.0.1"
 ```
 
 The version range follows `hllrcon`'s compatibility guidance: it accepts patch
 fixes but does not automatically cross an HLL server compatibility boundary.
+The Pydantic range keeps its compiled core compatible with the
+`typing_extensions` version used by stable Red 3.5.
 
 Store the RCON password in Red's shared API-token vault from a private channel
 or DM. The password is global to this Red instance and is never placed in the
@@ -121,6 +123,14 @@ Each batch contains up to 50 events within Discord's embed size limit. If more
 than 500 events accumulate while Discord is unavailable, the oldest pending
 events are discarded and the next successful message reports how many were
 dropped. Player names cannot create Discord mentions.
+
+If Red reports `cannot import name 'Sentinel' from 'typing_extensions'`, update
+the cog so Downloader receives the Pydantic compatibility pin. If the old
+dependency remains in Downloader's library, run the `pipinstall` command above
+as the bot owner and fully restart the Red process. BattleMetric now loads
+without its kill-feed workers when `hllrcon` is broken, allowing Server Info
+and the BattleMetrics API commands to remain available while the dependency is
+repaired.
 
 ## Token
 
