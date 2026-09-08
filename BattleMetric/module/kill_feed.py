@@ -29,10 +29,24 @@ log = logging.getLogger("red.BattleMetric.kill_feed")
 try:
     from hllrcon import HLLVRcon
     from hllrcon.admin_logs import HLLVPlayerKillAdminLog, HLLVPlayerTeamKillAdminLog
+    from hllrcon.exceptions import (
+        RconAuthError,
+        RconCommandError,
+        RconConnectionClosedError,
+        RconConnectionError,
+        RconConnectionRefusedError,
+        RconMessageError,
+    )
 except Exception as exc:  # noqa: BLE001 - keep unrelated BattleMetric modules loadable
     HLLVRcon = None
     HLLVPlayerKillAdminLog = None
     HLLVPlayerTeamKillAdminLog = None
+    RconAuthError = None
+    RconCommandError = None
+    RconConnectionClosedError = None
+    RconConnectionError = None
+    RconConnectionRefusedError = None
+    RconMessageError = None
     HLLRCON_IMPORT_ERROR: Exception | None = exc
 else:
     HLLRCON_IMPORT_ERROR = None
@@ -44,6 +58,10 @@ class KillFeedEvent:
 
     line: str
     team_kill: bool
+
+
+class KillFeedConnectionTestError(RuntimeError):
+    """A sanitized RCON test failure that is safe to show in Discord."""
 
 
 class KillFeedModule:
@@ -188,11 +206,37 @@ class KillFeedModule:
             raise ValueError("The HLL RCON password is not configured in Red's API-token vault.")
 
         client, lock = self._get_client(guild.id, host, port, self._password)
-        async with lock:
-            await asyncio.wait_for(
-                client.get_admin_log(1),
-                timeout=self.RCON_TIMEOUT_SECONDS,
+        stage = "RCON V2 handshake"
+        try:
+            async with lock:
+                await asyncio.wait_for(
+                    client.connect(),
+                    timeout=self.RCON_TIMEOUT_SECONDS,
+                )
+                stage = "GetAdminLog request"
+                await asyncio.wait_for(
+                    client.get_admin_log(1),
+                    timeout=self.RCON_TIMEOUT_SECONDS,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            client.disconnect()
+            current = self._clients.get(guild.id)
+            if current is not None and current[1] is client:
+                self._clients.pop(guild.id, None)
+                self._client_locks.pop(guild.id, None)
+            log.warning(
+                "HLL: Vietnam RCON test failed for guild %s during %s (%s): %s",
+                guild.id,
+                stage,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
             )
+            raise KillFeedConnectionTestError(
+                self._connection_failure_message(exc, stage)
+            ) from exc
 
     @tasks.loop(seconds=POLL_INTERVAL_SECONDS)
     async def log_poller(self) -> None:
@@ -345,9 +389,69 @@ class KillFeedModule:
         if state is None or state[0] != signature:
             if state is not None:
                 state[1].disconnect()
-            self._clients[guild_id] = (signature, HLLVRcon(host=host, port=port, password=password))
+            self._clients[guild_id] = (
+                signature,
+                HLLVRcon(host=host, port=port, password=password, logger=log),
+            )
             self._client_locks[guild_id] = asyncio.Lock()
         return self._clients[guild_id][1], self._client_locks[guild_id]
+
+    @staticmethod
+    def _connection_failure_message(exc: Exception, stage: str) -> str:
+        if (
+            (RconAuthError is not None and isinstance(exc, RconAuthError))
+            or (
+                RconCommandError is not None
+                and isinstance(exc, RconCommandError)
+                and getattr(exc, "status_code", None) == 401
+            )
+        ):
+            return "The HLL server rejected the RCON password. Update the vault value and try again."
+
+        if RconConnectionRefusedError is not None and isinstance(exc, RconConnectionRefusedError):
+            return (
+                "The RCON endpoint refused the TCP connection. Verify the RCON port and the "
+                "game host's firewall or IP allowlist."
+            )
+
+        if RconConnectionClosedError is not None and isinstance(exc, RconConnectionClosedError):
+            if stage == "RCON V2 handshake":
+                return (
+                    "The TCP port accepted the connection, but the game server closed it during "
+                    "the RCON V2 handshake. Verify RCON is enabled, restart the game server after "
+                    "changing its RCON settings, and temporarily disconnect BattleMetrics or "
+                    "other RCON clients to test for a concurrent-connection limit."
+                )
+            return (
+                "RCON authenticated, but the server closed the connection before it answered "
+                "GetAdminLog. Temporarily disconnect other RCON clients and try again."
+            )
+
+        if isinstance(exc, TimeoutError):
+            return f"The {stage} timed out after 15 seconds. Check the RCON firewall and server status."
+
+        if RconMessageError is not None and isinstance(exc, RconMessageError):
+            return (
+                f"The {stage} returned data that is not valid HLL: Vietnam RCON V2. "
+                "Verify that this is the game server's RCON port, not its game or query port."
+            )
+
+        if RconCommandError is not None and isinstance(exc, RconCommandError):
+            return (
+                f"The HLL server rejected the {stage} with RCON status "
+                f"{getattr(exc, 'status_code', 'unknown')}."
+            )
+
+        if (
+            (RconConnectionError is not None and isinstance(exc, RconConnectionError))
+            or isinstance(exc, OSError)
+        ):
+            return (
+                f"The {stage} could not connect to the configured endpoint. Check the host, "
+                "RCON port, firewall, and IP allowlist."
+            )
+
+        return f"The {stage} failed. The bot owner should check the Red service log for details."
 
     def _disconnect_all(self) -> None:
         for _, client in self._clients.values():
@@ -494,6 +598,7 @@ class KillFeedCommandsMixin:
                 "update the cog dependencies and restart Red."
             )
             return
+        await self.kill_feed.refresh_password()
         if not settings.get("host") or not settings.get("port"):
             await ctx.send("Configure the RCON endpoint first with `killfeed configure <host> <port>`.")
             return
@@ -519,9 +624,15 @@ class KillFeedCommandsMixin:
         except ValueError as exc:
             await ctx.send(str(exc))
             return
-        except Exception as exc:  # noqa: BLE001 - present all connection failures uniformly
-            log.warning("HLL: Vietnam RCON connection test failed for guild %s: %s", ctx.guild.id, exc)
-            await ctx.send("The RCON connection test failed. Check the host, RCON port, and password.")
+        except KillFeedConnectionTestError as exc:
+            await ctx.send(str(exc))
+            return
+        except Exception:
+            log.exception("Unexpected HLL: Vietnam RCON test failure for guild %s", ctx.guild.id)
+            await ctx.send(
+                "The RCON connection test failed unexpectedly. "
+                "Ask the bot owner to check the Red service log."
+            )
             return
 
         try:

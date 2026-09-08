@@ -111,6 +111,19 @@ The Red host must be allowed through the game host's RCON firewall or allowlist.
 Because BattleMetrics may already hold an RCON connection, verify that the game
 host permits another concurrent RCON client.
 
+`Connection is closed` after `Connected!` means the TCP port was reachable but
+the game server ended the RCON V2 session during authentication or the first
+command. Confirm RCON is enabled in the host panel, restart the game server
+after changing its RCON password or port, and temporarily disconnect
+BattleMetrics or other RCON tools before retrying `killfeed setup`. This isolates
+a concurrent-client limit from a password or server configuration problem.
+
+The setup test reports its failing stage without exposing the password:
+
+- `RCON V2 handshake` covers session creation and password authentication.
+- `GetAdminLog request` confirms that the authenticated account can read the
+  admin log used by the feed.
+
 The module polls every three seconds and places new kills and team kills into a
 bounded in-memory queue. A separate worker sends at most one pooled embed per
 configured guild every three seconds. Overlapping RCON lookbacks are
