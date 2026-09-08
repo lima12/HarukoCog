@@ -7,17 +7,27 @@ from redbot.core import Config, commands
 from .api import BattleMetricsClient
 from .authorization import BattleMetricAuthorizationError
 from .commands_mixin import BattleMetricCommandsMixin
-from .module import ServerInfoCommandsMixin, ServerInfoModule
+from .module import (
+    KillFeedCommandsMixin,
+    KillFeedModule,
+    ServerInfoCommandsMixin,
+    ServerInfoModule,
+)
 
 
 log = logging.getLogger("red.BattleMetric")
 
 
-class BattleMetric(BattleMetricCommandsMixin, ServerInfoCommandsMixin, commands.Cog):
+class BattleMetric(
+    BattleMetricCommandsMixin,
+    ServerInfoCommandsMixin,
+    KillFeedCommandsMixin,
+    commands.Cog,
+):
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "0.3.0"
+    __version__ = "0.4.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -38,15 +48,19 @@ class BattleMetric(BattleMetricCommandsMixin, ServerInfoCommandsMixin, commands.
         )
         self.api = BattleMetricsClient()
         self.server_info = ServerInfoModule(self)
+        self.kill_feed = KillFeedModule(self)
         self.server_info.register_config()
+        self.kill_feed.register_config()
 
     async def cog_load(self) -> None:
         await self._migrate_legacy_api_token()
         self.api.set_token(await self.get_api_token())
         await self.server_info.start()
+        await self.kill_feed.start()
 
     def cog_unload(self) -> None:
         self.server_info.stop()
+        self.kill_feed.stop()
         self.bot.loop.create_task(self.api.close())
 
     async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
@@ -73,6 +87,9 @@ class BattleMetric(BattleMetricCommandsMixin, ServerInfoCommandsMixin, commands.
         service_name: str,
         api_tokens: Mapping[str, str],
     ) -> None:
+        if service_name == self.kill_feed.RCON_SERVICE_NAME:
+            self.kill_feed.set_password(api_tokens.get(self.kill_feed.RCON_PASSWORD_NAME))
+            return
         if service_name != self.API_SERVICE_NAME:
             return
         token = api_tokens.get(self.API_TOKEN_NAME)

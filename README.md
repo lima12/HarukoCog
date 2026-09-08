@@ -43,8 +43,8 @@ Use `[p]cog list HarukoCog` to see the cogs available from this repository.
 
 ## BattleMetric
 
-BattleMetric reads server data from the BattleMetrics API and can maintain a
-Server Info embed that refreshes every 60 seconds.
+BattleMetric reads server data from the BattleMetrics API, maintains a Server
+Info embed, and can publish a pooled HLL: Vietnam kill feed over direct RCON.
 
 After loading, configure the API token as the bot owner in a private channel or
 DM:
@@ -66,6 +66,29 @@ Server Info panel:
 [p]bm setserver SERVER_ID
 [p]serverinfo setup #server-status
 ```
+
+The kill feed requires `hllrcon`, which requires Python 3.11 or newer. Use
+Python 3.11 with the current stable Red 3.5 release. Downloader installs the
+pinned requirement when the cog is installed or updated. For a local cog
+checkout where that dependency is missing, install it into Red's environment
+and restart the bot:
+
+```text
+[p]load downloader
+[p]pipinstall "hllrcon>=2.0.0.4,<2.0.1"
+```
+
+Configure the RCON password in a private channel or DM, then set the HLL:
+Vietnam server's RCON endpoint and feed channel:
+
+```text
+[p]set api hllrcon password,YOUR_RCON_PASSWORD
+[p]killfeed configure RCON_HOST RCON_PORT
+[p]killfeed setup #kill-feed
+```
+
+The RCON port may differ from the public game/query port. Kill events are
+queued and pooled into at most one Discord embed every three seconds.
 
 See [BattleMetric/README.md](BattleMetric/README.md) for all commands and
 authorization details.

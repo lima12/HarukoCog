@@ -1,11 +1,12 @@
 {
   "author": ["Haruko"],
   "name": "BattleMetric",
-  "short": "BattleMetrics API helper cog.",
-  "description": "Modular Redbot cog for fetching BattleMetrics data, including automatic Server Info panels.",
-  "install_msg": "BattleMetric loaded. Use [p]help battlemetric to see commands.",
-  "requirements": ["aiohttp"],
-  "tags": ["battlemetrics", "api", "games", "servers"],
+  "short": "BattleMetrics API and HLL: Vietnam RCON helper cog.",
+  "description": "Modular Redbot cog for BattleMetrics server data, automatic Server Info panels, and a pooled HLL: Vietnam RCON kill feed.",
+  "install_msg": "BattleMetric loaded. Use [p]help battlemetric, [p]help serverinfo, or [p]help killfeed to see commands.",
+  "requirements": ["aiohttp", "hllrcon>=2.0.0.4,<2.0.1"],
+  "tags": ["battlemetrics", "api", "games", "servers", "hll", "rcon"],
   "min_bot_version": "3.5.0",
-  "end_user_data_statement": "Reads the global BattleMetrics API token from Red's shared API-token storage and stores per-guild settings, including Server Info panel channel/message IDs and authorized Discord user IDs."
+  "min_python_version": [3, 11, 0],
+  "end_user_data_statement": "Reads global BattleMetrics and HLL RCON secrets from Red's shared API-token storage and stores per-guild settings, including Server Info panel IDs, HLL RCON endpoint and kill-feed channel settings, and authorized Discord user IDs."
 }

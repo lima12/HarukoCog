@@ -29,6 +29,10 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `[p]bm rawget <path> [params_json]` - Bot owner only. Raw GET helper for testing new endpoints.
 - `[p]serverinfo setup #channel` - Authorized member. Create the automatic Server Info panel in the mentioned text channel.
 - `[p]serverinfo modify <message_id>` - Authorized member. Run this in the channel containing a message sent by this bot to adopt and update that message as the panel.
+- `[p]killfeed configure <host> <port>` - Authorized member. Configure the HLL: Vietnam RCON endpoint and disable the feed until setup is run.
+- `[p]killfeed setup #channel` - Authorized member. Test RCON and enable pooled kill-feed messages in the mentioned channel.
+- `[p]killfeed status` - Authorized member. Show the endpoint, channel, connection-secret status, and pending queue size.
+- `[p]killfeed stop` - Authorized member. Disable the feed and discard queued events.
 
 ## Authorization
 
@@ -63,6 +67,60 @@ Each Discord guild has one tracked Server Info panel. Running `setup` creates a
 new panel and replaces the previously tracked one. A panel is pinned to the
 server selected during setup, so change the default server and run `modify` on
 the panel message when you want it to track a different server.
+
+## HLL: Vietnam Kill Feed
+
+The kill feed connects directly to the game server's RCON port through the
+external [`hllrcon`](https://github.com/timraay/hllrcon) package. It does not
+read the BattleMetrics web console and does not consume BattleMetrics API
+requests. `hllrcon` requires Python 3.11 or newer; with the current stable Red
+3.5 release, run the bot on Python 3.11.
+
+Downloader installs the pinned `hllrcon` dependency into Red's environment when
+the cog is installed or updated. For a local checkout where dependencies were
+not installed by Downloader, the bot owner can install the same release range
+from Discord and then restart Red:
+
+```text
+[p]load downloader
+[p]pipinstall "hllrcon>=2.0.0.4,<2.0.1"
+```
+
+The version range follows `hllrcon`'s compatibility guidance: it accepts patch
+fixes but does not automatically cross an HLL server compatibility boundary.
+
+Store the RCON password in Red's shared API-token vault from a private channel
+or DM. The password is global to this Red instance and is never placed in the
+guild configuration:
+
+```text
+[p]set api hllrcon password,YOUR_RCON_PASSWORD
+```
+
+Then configure the RCON endpoint and target Discord channel:
+
+```text
+[p]killfeed configure RCON_HOST RCON_PORT
+[p]killfeed setup #kill-feed
+```
+
+Use the server's RCON port, which may differ from its public game/query port.
+The Red host must be allowed through the game host's RCON firewall or allowlist.
+Because BattleMetrics may already hold an RCON connection, verify that the game
+host permits another concurrent RCON client.
+
+The module polls every three seconds and places new kills and team kills into a
+bounded in-memory queue. A separate worker sends at most one pooled embed per
+configured guild every three seconds. Overlapping RCON lookbacks are
+deduplicated, temporary connection failures use exponential retry delays, and
+the lookback expands up to five minutes to recover missed events. Queued and
+deduplication state is intentionally in memory, so reloading the cog starts a
+fresh feed rather than replaying old logs.
+
+Each batch contains up to 50 events within Discord's embed size limit. If more
+than 500 events accumulate while Discord is unavailable, the oldest pending
+events are discarded and the next successful message reports how many were
+dropped. Player names cannot create Discord mentions.
 
 ## Token
 
