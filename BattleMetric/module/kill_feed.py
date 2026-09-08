@@ -37,6 +37,7 @@ try:
         RconConnectionRefusedError,
         RconMessageError,
     )
+    from hllrcon.protocol import RconProtocol
 except Exception as exc:  # noqa: BLE001 - keep unrelated BattleMetric modules loadable
     HLLVRcon = None
     HLLVPlayerKillAdminLog = None
@@ -47,6 +48,7 @@ except Exception as exc:  # noqa: BLE001 - keep unrelated BattleMetric modules l
     RconConnectionError = None
     RconConnectionRefusedError = None
     RconMessageError = None
+    RconProtocol = None
     HLLRCON_IMPORT_ERROR: Exception | None = exc
 else:
     HLLRCON_IMPORT_ERROR = None
@@ -62,6 +64,32 @@ class KillFeedEvent:
 
 class KillFeedConnectionTestError(RuntimeError):
     """A sanitized RCON test failure that is safe to show in Discord."""
+
+
+def _install_uvloop_transport_compatibility() -> None:
+    """Allow hllrcon 2.0.0.4 to use the transport supplied by Red's uvloop."""
+    if RconProtocol is None:
+        return
+
+    current_handler = RconProtocol.connection_made
+    if getattr(current_handler, "__battlemetric_uvloop_compatible__", False):
+        return
+
+    def connection_made(protocol: Any, transport: asyncio.BaseTransport) -> None:
+        try:
+            current_handler(protocol, transport)
+        except TypeError as exc:
+            is_uvloop_transport = type(transport).__module__.startswith("uvloop.")
+            if str(exc) != "Transport must be an instance of asyncio.Transport" or not is_uvloop_transport:
+                raise
+
+            # uvloop's TCP transport implements the asyncio transport contract but
+            # does not inherit asyncio.Transport on supported Red/Python versions.
+            protocol.logger.info("Accepted uvloop TCP transport for HLL RCON")
+            protocol._transport = transport
+
+    connection_made.__battlemetric_uvloop_compatible__ = True
+    RconProtocol.connection_made = connection_made
 
 
 class KillFeedModule:
@@ -109,6 +137,7 @@ class KillFeedModule:
                 HLLRCON_IMPORT_ERROR,
             )
             return
+        _install_uvloop_transport_compatibility()
         if not self.log_poller.is_running():
             self.log_poller.start()
         if not self.queue_worker.is_running():
@@ -197,6 +226,7 @@ class KillFeedModule:
     async def test_connection(self, guild: discord.Guild) -> None:
         if not self.is_available():
             raise RuntimeError("The hllrcon dependency is unavailable.")
+        _install_uvloop_transport_compatibility()
         settings = await self.get_settings(guild)
         host = settings.get("host")
         port = settings.get("port")

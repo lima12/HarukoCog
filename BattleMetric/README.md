@@ -111,12 +111,18 @@ The Red host must be allowed through the game host's RCON firewall or allowlist.
 Because BattleMetrics may already hold an RCON connection, verify that the game
 host permits another concurrent RCON client.
 
-`Connection is closed` after `Connected!` means the TCP port was reachable but
-the game server ended the RCON V2 session during authentication or the first
-command. Confirm RCON is enabled in the host panel, restart the game server
-after changing its RCON password or port, and temporarily disconnect
-BattleMetrics or other RCON tools before retrying `killfeed setup`. This isolates
-a concurrent-client limit from a password or server configuration problem.
+`hllrcon` 2.0.0.4 performs a strict transport type check that rejects the
+`uvloop` TCP transport used by Red on Linux, even though that transport provides
+the required asyncio interface. BattleMetric applies a narrow compatibility
+shim for that exact `uvloop` error. Seeing `Accepted uvloop TCP transport for
+HLL RCON` in Red's log confirms that the workaround was used.
+
+If `Connection is closed` remains after that log line, the connection reached
+the actual RCON handshake. Confirm RCON is enabled in the host panel, restart
+the game server after changing its RCON password or port, and temporarily
+disconnect BattleMetrics or other RCON tools before retrying `killfeed setup`.
+This isolates a concurrent-client limit from a password or server configuration
+problem.
 
 The setup test reports its failing stage without exposing the password:
 
