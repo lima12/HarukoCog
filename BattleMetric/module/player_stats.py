@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
 import time
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, ClassVar
 
 import discord
@@ -19,12 +21,30 @@ from .hll_database import HLLDatabaseError, HLLPlayerStats
 
 log = logging.getLogger("red.BattleMetric.player_stats")
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except Exception as exc:  # noqa: BLE001 - keep database stats available without Pillow
+    Image = None
+    ImageDraw = None
+    ImageFont = None
+    PILLOW_IMPORT_ERROR: Exception | None = exc
+else:
+    PILLOW_IMPORT_ERROR = None
+
 
 @dataclass(frozen=True)
 class BattleMetricsPlayerProfile:
     player_id: str
     name: str | None
     time_played_seconds: int | None
+
+
+@dataclass(frozen=True)
+class CardTextSlot:
+    position: tuple[int, int]
+    max_width: int
+    font_size: int
+    min_font_size: int = 14
 
 
 class PlayerStatsModule:
@@ -38,6 +58,19 @@ class PlayerStatsModule:
     STEAM_IDENTIFIER_TYPES: ClassVar[tuple[str, ...]] = ("steamID",)
     PROFILE_CACHE_SECONDS = 300
     MAX_PROFILE_CACHE_SIZE = 1000
+    RESOURCE_DIRECTORY = Path(__file__).resolve().parent.parent / "res"
+    TEMPLATE_PATH = RESOURCE_DIRECTORY / "template.png"
+    FONT_PATH = RESOURCE_DIRECTORY / "Wallpoet-Regular.ttf"
+    CARD_TEXT_COLOR: ClassVar[tuple[int, int, int, int]] = (29, 31, 27, 255)
+    CARD_SLOTS: ClassVar[dict[str, CardTextSlot]] = {
+        "name": CardTextSlot((200, 230), 370, 28),
+        "date": CardTextSlot((856, 226), 175, 26),
+        "discord_id": CardTextSlot((321, 325), 700, 28),
+        "eos_id": CardTextSlot((321, 415), 700, 28),
+        "kills": CardTextSlot((176, 972), 330, 32),
+        "deaths": CardTextSlot((176, 1108), 330, 32),
+        "time_played": CardTextSlot((176, 1256), 330, 30),
+    }
 
     def __init__(self, cog: Any):
         self.cog = cog
@@ -271,6 +304,123 @@ class PlayerStatsModule:
         embed.set_footer(text="Want to track your data? Use /link")
         return embed
 
+    async def render_card(
+        self,
+        stats: HLLPlayerStats,
+        *,
+        alias: str | None,
+        member: discord.Member | None,
+        time_played_seconds: int | None,
+    ) -> io.BytesIO:
+        """Render the supplied statistics into the bundled passport template."""
+        return await asyncio.to_thread(
+            self._render_card_sync,
+            stats,
+            alias=alias,
+            member=member,
+            time_played_seconds=time_played_seconds,
+        )
+
+    def _render_card_sync(
+        self,
+        stats: HLLPlayerStats,
+        *,
+        alias: str | None,
+        member: discord.Member | None,
+        time_played_seconds: int | None,
+    ) -> io.BytesIO:
+        if PILLOW_IMPORT_ERROR is not None or None in (Image, ImageDraw, ImageFont):
+            raise RuntimeError("Pillow is unavailable") from PILLOW_IMPORT_ERROR
+        if not self.TEMPLATE_PATH.is_file() or not self.FONT_PATH.is_file():
+            raise FileNotFoundError("Player-stat card template or font is missing")
+
+        with Image.open(self.TEMPLATE_PATH) as source:
+            image = source.convert("RGBA")
+        draw = ImageDraw.Draw(image)
+        values = {
+            "name": self._single_line(alias or "Unavailable"),
+            "date": self._enlisted_date_text(member),
+            "discord_id": str(stats.discord_id)
+            if stats.discord_id is not None
+            else "Not linked",
+            "eos_id": stats.eos_id,
+            "kills": f"{stats.kills:,}",
+            "deaths": f"{stats.deaths:,}",
+            "time_played": self._format_duration_text(time_played_seconds),
+        }
+        font_cache: dict[int, Any] = {}
+        for field_name, slot in self.CARD_SLOTS.items():
+            text, font = self._fitted_text(
+                draw,
+                values[field_name],
+                slot,
+                font_cache,
+            )
+            draw.text(
+                slot.position,
+                text,
+                font=font,
+                fill=self.CARD_TEXT_COLOR,
+            )
+
+        output = io.BytesIO()
+        try:
+            image.save(output, format="PNG", compress_level=6)
+        finally:
+            image.close()
+        output.seek(0)
+        return output
+
+    def _fitted_text(
+        self,
+        draw: Any,
+        text: str,
+        slot: CardTextSlot,
+        font_cache: dict[int, Any],
+    ) -> tuple[str, Any]:
+        for size in range(slot.font_size, slot.min_font_size - 1, -1):
+            font = font_cache.get(size)
+            if font is None:
+                font = ImageFont.truetype(str(self.FONT_PATH), size=size)
+                font_cache[size] = font
+            bounds = draw.textbbox((0, 0), text, font=font)
+            if bounds[2] - bounds[0] <= slot.max_width:
+                return text, font
+
+        font = font_cache[slot.min_font_size]
+        suffix = "..."
+        shortened = text
+        while shortened:
+            candidate = shortened.rstrip() + suffix
+            bounds = draw.textbbox((0, 0), candidate, font=font)
+            if bounds[2] - bounds[0] <= slot.max_width:
+                return candidate, font
+            shortened = shortened[:-1]
+        return suffix, font
+
+    @staticmethod
+    def build_card_embed() -> discord.Embed:
+        embed = discord.Embed(
+            title="HLL VN Stat",
+            color=discord.Color.dark_green(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_image(url="attachment://hll-vn-stat.png")
+        embed.set_footer(text="Want to track your data? Use /link")
+        return embed
+
+    @staticmethod
+    def _single_line(value: str) -> str:
+        return " ".join(str(value).split()) or "Unavailable"
+
+    @staticmethod
+    def _enlisted_date_text(member: discord.Member | None) -> str:
+        if member is None:
+            return "Not linked"
+        if member.joined_at is None:
+            return "Unavailable"
+        return member.joined_at.strftime("%m/%d/%Y")
+
     @staticmethod
     def _enlisted_date(member: discord.Member | None) -> str:
         if member is None:
@@ -281,6 +431,11 @@ class PlayerStatsModule:
 
     @staticmethod
     def _format_duration(seconds: int | None) -> str:
+        value = PlayerStatsModule._format_duration_text(seconds)
+        return value if seconds is None else f"`{value}`"
+
+    @staticmethod
+    def _format_duration_text(seconds: int | None) -> str:
         if seconds is None:
             return "Unavailable"
         days, remainder = divmod(max(0, seconds), 86400)
@@ -292,7 +447,7 @@ class PlayerStatsModule:
         if hours or days:
             parts.append(f"{hours}h")
         parts.append(f"{minutes}m")
-        return f"`{' '.join(parts)}`"
+        return " ".join(parts)
 
 
 class PlayerStatsCommandsMixin:
@@ -401,13 +556,29 @@ class PlayerStatsCommandsMixin:
             alias = battlemetrics_profile.name or alias
             time_played_seconds = battlemetrics_profile.time_played_seconds
 
-        embed = self.player_stats.build_embed(
-            stats,
-            alias=alias,
-            member=member,
-            time_played_seconds=time_played_seconds,
-        )
+        try:
+            card = await self.player_stats.render_card(
+                stats,
+                alias=alias,
+                member=member,
+                time_played_seconds=time_played_seconds,
+            )
+        except Exception:
+            log.exception("Could not render HLL VN stat card; using text embed")
+            embed = self.player_stats.build_embed(
+                stats,
+                alias=alias,
+                member=member,
+                time_played_seconds=time_played_seconds,
+            )
+            await interaction.followup.send(
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
         await interaction.followup.send(
-            embed=embed,
+            embed=self.player_stats.build_card_embed(),
+            file=discord.File(card, filename="hll-vn-stat.png"),
             allowed_mentions=discord.AllowedMentions.none(),
         )

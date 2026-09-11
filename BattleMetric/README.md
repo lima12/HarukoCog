@@ -85,7 +85,7 @@ from Discord and then restart Red:
 
 ```text
 [p]load downloader
-[p]pipinstall "pydantic>=2.11.5,<2.12" "hllrcon>=2.0.0.4,<2.0.1"
+[p]pipinstall "Pillow>=11,<13" "pydantic>=2.11.5,<2.12" "hllrcon>=2.0.0.4,<2.0.1"
 ```
 
 The version range follows `hllrcon`'s compatibility guidance: it accepts patch
@@ -244,6 +244,26 @@ hiding the locally stored combat statistics.
 `Enlisted Date` is the linked member's join date for the Discord server where
 the command is used. A direct EOS lookup that is not linked to a member shows
 that the Discord-specific fields are not linked.
+
+The command renders these values into `res/template.png` with the bundled
+`res/Wallpoet-Regular.ttf` font and sends the completed PNG in the Discord
+embed. Rendering runs outside the bot event loop. If the image assets or Pillow
+cannot be loaded, the command logs the failure and sends the text-field embed
+instead.
+
+Downloader installs the `Pillow` Python package from `info.json`. Current
+Ubuntu systems normally receive a prebuilt Pillow wheel and need no additional
+APT packages. If Pillow must compile from source, install the compiler, Python
+headers, and the PNG/font dependencies before reinstalling the cog:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential python3-dev python3-setuptools \
+  libjpeg-dev zlib1g-dev libfreetype6-dev
+```
+
+These packages follow Pillow's Linux build requirements. The Wallpoet font is
+loaded directly from the cog, so it does not need to be installed system-wide.
 
 ## Token
 

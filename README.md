@@ -76,7 +76,7 @@ and restart the bot:
 
 ```text
 [p]load downloader
-[p]pipinstall "asyncpg>=0.30,<0.32" "pydantic>=2.11.5,<2.12" "hllrcon>=2.0.0.4,<2.0.1"
+[p]pipinstall "asyncpg>=0.30,<0.32" "Pillow>=11,<13" "pydantic>=2.11.5,<2.12" "hllrcon>=2.0.0.4,<2.0.1"
 ```
 
 Configure the RCON password in a private channel or DM, then set the HLL:

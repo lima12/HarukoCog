@@ -4,7 +4,7 @@
   "short": "BattleMetrics API, HLL RCON, account-link, and stats cog.",
   "description": "Modular Redbot cog for BattleMetrics server data, Server Info panels, HLL: Vietnam kill feeds, PostgreSQL statistics, and verified Discord-to-EOS account linking.",
   "install_msg": "BattleMetric loaded. Use [p]help battlemetric, [p]help serverinfo, [p]help killfeed, /link, or /vnstat to see commands.",
-  "requirements": ["aiohttp", "asyncpg>=0.30,<0.32", "pydantic>=2.11.5,<2.12", "hllrcon>=2.0.0.4,<2.0.1"],
+  "requirements": ["aiohttp", "asyncpg>=0.30,<0.32", "Pillow>=11,<13", "pydantic>=2.11.5,<2.12", "hllrcon>=2.0.0.4,<2.0.1"],
   "tags": ["battlemetrics", "api", "games", "servers", "hll", "rcon", "postgresql"],
   "min_bot_version": "3.5.0",
   "min_python_version": [3, 11, 0],
