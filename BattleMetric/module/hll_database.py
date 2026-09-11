@@ -27,11 +27,13 @@ else:
 
 try:
     from hllrcon.admin_logs import (
+        HLLVPlayerConnectAdminLog,
         HLLVPlayerKillAdminLog,
         HLLVPlayerSendMessageAdminLog,
         HLLVPlayerTeamKillAdminLog,
     )
 except Exception as exc:  # noqa: BLE001 - reported separately from PostgreSQL
+    HLLVPlayerConnectAdminLog = None
     HLLVPlayerKillAdminLog = None
     HLLVPlayerSendMessageAdminLog = None
     HLLVPlayerTeamKillAdminLog = None
@@ -320,6 +322,18 @@ class HLLDatabaseModule:
             ):
                 await self._handle_chat_entry(guild, entry)
 
+            is_connect = HLLVPlayerConnectAdminLog is not None and isinstance(
+                entry,
+                HLLVPlayerConnectAdminLog,
+            )
+            if is_connect:
+                fingerprint = (
+                    f"{endpoint_key}\0{entry.timestamp.isoformat()}\0{entry.raw_message}"
+                )
+                if self._mark_stat_seen(fingerprint):
+                    self._enqueue_stat(StatDelta(str(entry.player_id), 0, 0))
+                continue
+
             is_kill = HLLVPlayerKillAdminLog is not None and isinstance(
                 entry,
                 HLLVPlayerKillAdminLog,
@@ -405,6 +419,7 @@ class HLLDatabaseModule:
             )
             if existing_discord_id is not None and str(existing_discord_id) != discord_id_text:
                 raise EOSAccountAlreadyLinkedError
+            await connection.execute(self.STATS_UPSERT_SQL, eos_id, 0, 0)
             await connection.execute(self.LINK_UPSERT_SQL, discord_id_text, eos_id)
 
     async def _notify_link_result(
@@ -531,18 +546,11 @@ class HLLDatabaseModule:
 
         pool = await self.ensure_ready()
         async with pool.acquire() as connection, connection.transaction():
-            linked_rows = await connection.fetch(
-                'SELECT "EOS_Id" FROM slhhll."Discord" WHERE "EOS_Id" = ANY($1::text[])',
-                list(aggregated),
-            )
-            linked_ids = {str(row["EOS_Id"]) for row in linked_rows}
             updates = [
                 (eos_id, totals[0], totals[1])
                 for eos_id, totals in aggregated.items()
-                if eos_id in linked_ids
             ]
-            if updates:
-                await connection.executemany(self.STATS_UPSERT_SQL, updates)
+            await connection.executemany(self.STATS_UPSERT_SQL, updates)
 
     async def delete_user_data(self, user_id: int) -> None:
         async with self._token_lock:
@@ -556,15 +564,6 @@ class HLLDatabaseModule:
         pool = await self.ensure_ready()
         discord_id = str(user_id)
         async with pool.acquire() as connection, connection.transaction():
-            eos_id = await connection.fetchval(
-                'SELECT "EOS_Id" FROM slhhll."Discord" WHERE "Discord_Id" = $1',
-                discord_id,
-            )
-            if eos_id is not None:
-                await connection.execute(
-                    'DELETE FROM slhhll."RCON_DATA" WHERE "EOS_Id" = $1',
-                    str(eos_id),
-                )
             await connection.execute(
                 'DELETE FROM slhhll."Discord" WHERE "Discord_Id" = $1',
                 discord_id,

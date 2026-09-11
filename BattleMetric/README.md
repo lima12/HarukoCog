@@ -184,8 +184,9 @@ these database constraints:
 - `slhhll."Discord"."EOS_Id"` should be unique so one game account cannot be
   assigned to multiple Discord accounts.
 - `slhhll."RCON_DATA"."EOS_Id"` must be a primary key or unique.
-- If `RCON_DATA.EOS_Id` is a foreign key, it should reference
-  `Discord.EOS_Id`.
+- If a foreign key is used, `Discord.EOS_Id` should reference
+  `RCON_DATA.EOS_Id`. `RCON_DATA.EOS_Id` must not reference `Discord.EOS_Id`,
+  because statistics exist before a Discord account is linked.
 
 Members run `/link` and receive an ephemeral `VN-####` token. They send that
 token in Unit or Team chat on the configured HLL server within five minutes.
@@ -194,18 +195,22 @@ Discord/EOS upsert in a transaction, burns the token, and sends a confirmation
 DM. If DMs are closed, it posts the result in the channel where `/link` was
 used.
 
-Kill and death records use the same RCON response as the Discord kill feed, so
-the database module does not open a second RCON connection. Records enter a
-bounded `asyncio.Queue` and are committed in one transaction when 50 records
-accumulate or three seconds pass. A failed batch is retained and retried with
-backoff. Overlapping RCON lookbacks and duplicate guild configurations for the
-same endpoint are deduplicated before queueing.
+Player-connect, kill, and death records use the same RCON response as the
+Discord kill feed, so the database module does not open a second RCON
+connection. A `CONNECTED` event creates an `RCON_DATA` row with zero kills and
+deaths. Every kill then increments the attacker's `Kill` value and the victim's
+`Dead` value whether or not either player has linked Discord.
 
-Because `RCON_DATA.EOS_Id` is linked to `Discord.EOS_Id`, only verified EOS IDs
-are written to the statistics table. Events observed before an account is
-linked are not backfilled. Database ingestion continues when the Discord kill
-feed is disabled, provided the RCON endpoint, RCON password, and database
-credentials are configured.
+Records enter a bounded `asyncio.Queue` and are committed in one transaction
+when 50 records accumulate or three seconds pass. A failed batch is retained
+and retried with backoff. Overlapping RCON lookbacks and duplicate guild
+configurations for the same endpoint are deduplicated before queueing. Database
+ingestion continues when the Discord kill feed is disabled, provided the RCON
+endpoint, RCON password, and database credentials are configured.
+
+Account linking only adds the Discord-to-EOS mapping. Existing `RCON_DATA`
+statistics remain intact when a member links, relinks, unlinks, or requests
+deletion of their Discord mapping.
 
 ## Token
 
