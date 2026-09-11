@@ -399,17 +399,6 @@ class PlayerStatsModule:
         return suffix, font
 
     @staticmethod
-    def build_card_embed() -> discord.Embed:
-        embed = discord.Embed(
-            title="HLL VN Stat",
-            color=discord.Color.dark_green(),
-            timestamp=discord.utils.utcnow(),
-        )
-        embed.set_image(url="attachment://hll-vn-stat.png")
-        embed.set_footer(text="Want to track your data? Use /link")
-        return embed
-
-    @staticmethod
     def _single_line(value: str) -> str:
         return " ".join(str(value).split()) or "Unavailable"
 
@@ -556,6 +545,12 @@ class PlayerStatsCommandsMixin:
             alias = battlemetrics_profile.name or alias
             time_played_seconds = battlemetrics_profile.time_played_seconds
 
+        embed = self.player_stats.build_embed(
+            stats,
+            alias=alias,
+            member=member,
+            time_played_seconds=time_played_seconds,
+        )
         try:
             card = await self.player_stats.render_card(
                 stats,
@@ -565,20 +560,15 @@ class PlayerStatsCommandsMixin:
             )
         except Exception:
             log.exception("Could not render HLL VN stat card; using text embed")
-            embed = self.player_stats.build_embed(
-                stats,
-                alias=alias,
-                member=member,
-                time_played_seconds=time_played_seconds,
-            )
             await interaction.followup.send(
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
 
+        embed.set_image(url="attachment://hll-vn-stat.png")
         await interaction.followup.send(
-            embed=self.player_stats.build_card_embed(),
+            embed=embed,
             file=discord.File(card, filename="hll-vn-stat.png"),
             allowed_mentions=discord.AllowedMentions.none(),
         )

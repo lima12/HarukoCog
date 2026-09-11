@@ -247,9 +247,10 @@ that the Discord-specific fields are not linked.
 
 The command renders these values into `res/template.png` with the bundled
 `res/Wallpoet-Regular.ttf` font and sends the completed PNG in the Discord
-embed. Rendering runs outside the bot event loop. If the image assets or Pillow
-cannot be loaded, the command logs the failure and sends the text-field embed
-instead.
+embed while retaining the same values as searchable embed fields. Rendering
+runs outside the bot event loop. If the image assets or Pillow cannot be
+loaded, the command logs the failure and sends the text-field embed without the
+image.
 
 Downloader installs the `Pillow` Python package from `info.json`. Current
 Ubuntu systems normally receive a prebuilt Pillow wheel and need no additional
