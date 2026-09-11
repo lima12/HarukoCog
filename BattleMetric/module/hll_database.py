@@ -79,6 +79,14 @@ class StatDelta:
     deaths: int
 
 
+@dataclass(frozen=True)
+class HLLPlayerStats:
+    eos_id: str
+    kills: int
+    deaths: int
+    discord_id: int | None
+
+
 class HLLDatabaseModule:
     """Link Discord users to EOS IDs and aggregate RCON combat statistics."""
 
@@ -94,6 +102,7 @@ class HLLDatabaseModule:
     MAX_BATCH_RECORDS = 50
     MAX_QUEUE_SIZE = 5000
     MAX_SEEN_EVENTS = 20000
+    MAX_CACHED_ALIASES = 10000
     DATABASE_TIMEOUT_SECONDS = 15
 
     LINK_UPSERT_SQL: ClassVar[str] = (
@@ -108,6 +117,19 @@ class HLLDatabaseModule:
         '"Kill" = slhhll."RCON_DATA"."Kill" + EXCLUDED."Kill", '
         '"Dead" = slhhll."RCON_DATA"."Dead" + EXCLUDED."Dead"'
     )
+    STATS_BY_DISCORD_SQL: ClassVar[str] = (
+        'SELECT d."Discord_Id", d."EOS_Id", '
+        'COALESCE(r."Kill", 0) AS "Kill", COALESCE(r."Dead", 0) AS "Dead" '
+        'FROM slhhll."Discord" AS d '
+        'LEFT JOIN slhhll."RCON_DATA" AS r ON r."EOS_Id" = d."EOS_Id" '
+        'WHERE d."Discord_Id" = $1 LIMIT 1'
+    )
+    STATS_BY_EOS_SQL: ClassVar[str] = (
+        'SELECT d."Discord_Id", r."EOS_Id", r."Kill", r."Dead" '
+        'FROM slhhll."RCON_DATA" AS r '
+        'LEFT JOIN slhhll."Discord" AS d ON d."EOS_Id" = r."EOS_Id" '
+        'WHERE r."EOS_Id" = $1 LIMIT 1'
+    )
 
     def __init__(self, cog: Any):
         self.cog = cog
@@ -120,6 +142,7 @@ class HLLDatabaseModule:
         self._stat_queue: asyncio.Queue[StatDelta] = asyncio.Queue(maxsize=self.MAX_QUEUE_SIZE)
         self._stats_task: asyncio.Task[None] | None = None
         self._stats_seen: OrderedDict[str, None] = OrderedDict()
+        self._player_aliases: OrderedDict[str, str] = OrderedDict()
         self._dropped_stats = 0
         self._last_drop_log_at = 0.0
         self._stopping = False
@@ -229,10 +252,8 @@ class HLLDatabaseModule:
         return DatabaseSettings(host, port, database, user, password, schema)
 
     async def ensure_ready(self) -> Any:
-        if not self.is_available() or asyncpg is None:
-            raise HLLDatabaseUnavailableError(
-                "The asyncpg or hllrcon dependency is unavailable."
-            )
+        if asyncpg is None:
+            raise HLLDatabaseUnavailableError("The asyncpg dependency is unavailable.")
         settings = self._settings
         if settings is None:
             raise HLLDatabaseUnavailableError("PostgreSQL credentials are not configured.")
@@ -282,6 +303,36 @@ class HLLDatabaseModule:
                 'SELECT "EOS_Id", "Kill", "Dead" FROM slhhll."RCON_DATA" LIMIT 0'
             )
 
+    async def get_stats_by_discord(self, discord_id: int) -> HLLPlayerStats | None:
+        pool = await self.ensure_ready()
+        async with pool.acquire() as connection:
+            row = await connection.fetchrow(self.STATS_BY_DISCORD_SQL, str(discord_id))
+        return self._stats_from_row(row)
+
+    async def get_stats_by_eos(self, eos_id: str) -> HLLPlayerStats | None:
+        pool = await self.ensure_ready()
+        async with pool.acquire() as connection:
+            row = await connection.fetchrow(self.STATS_BY_EOS_SQL, eos_id)
+        return self._stats_from_row(row)
+
+    def get_cached_alias(self, eos_id: str) -> str | None:
+        alias = self._player_aliases.get(eos_id)
+        if alias is not None:
+            self._player_aliases.move_to_end(eos_id)
+        return alias
+
+    @staticmethod
+    def _stats_from_row(row: Mapping[str, Any] | None) -> HLLPlayerStats | None:
+        if row is None:
+            return None
+        discord_id_value = row["Discord_Id"]
+        return HLLPlayerStats(
+            eos_id=str(row["EOS_Id"]),
+            kills=int(row["Kill"] or 0),
+            deaths=int(row["Dead"] or 0),
+            discord_id=int(discord_id_value) if discord_id_value is not None else None,
+        )
+
     async def create_link_token(
         self,
         discord_id: int,
@@ -320,6 +371,7 @@ class HLLDatabaseModule:
                 HLLVPlayerSendMessageAdminLog is not None
                 and isinstance(entry, HLLVPlayerSendMessageAdminLog)
             ):
+                self._remember_player_alias(entry.player_id, entry.player_name)
                 await self._handle_chat_entry(guild, entry)
 
             is_connect = HLLVPlayerConnectAdminLog is not None and isinstance(
@@ -327,6 +379,7 @@ class HLLDatabaseModule:
                 HLLVPlayerConnectAdminLog,
             )
             if is_connect:
+                self._remember_player_alias(entry.player_id, entry.player_name)
                 fingerprint = (
                     f"{endpoint_key}\0{entry.timestamp.isoformat()}\0{entry.raw_message}"
                 )
@@ -345,11 +398,23 @@ class HLLDatabaseModule:
             if not is_kill and not is_team_kill:
                 continue
 
+            self._remember_player_alias(entry.instigator_id, entry.instigator_name)
+            self._remember_player_alias(entry.victim_id, entry.victim_name)
             fingerprint = f"{endpoint_key}\0{entry.timestamp.isoformat()}\0{entry.raw_message}"
             if not self._mark_stat_seen(fingerprint):
                 continue
             self._enqueue_stat(StatDelta(str(entry.instigator_id), 1, 0))
             self._enqueue_stat(StatDelta(str(entry.victim_id), 0, 1))
+
+    def _remember_player_alias(self, eos_id: object, player_name: object) -> None:
+        identifier = str(eos_id).strip()
+        alias = str(player_name).strip()
+        if not identifier or not alias:
+            return
+        self._player_aliases[identifier] = alias[:200]
+        self._player_aliases.move_to_end(identifier)
+        while len(self._player_aliases) > self.MAX_CACHED_ALIASES:
+            self._player_aliases.popitem(last=False)
 
     async def _handle_chat_entry(self, guild: discord.Guild, entry: Any) -> None:
         tokens = {match.group(0).upper() for match in self.TOKEN_PATTERN.finditer(entry.message)}

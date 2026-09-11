@@ -126,9 +126,43 @@ class BattleMetricsClient:
         self,
         player_id: str,
         *,
+        include: Optional[str] = None,
+        server_id: Optional[str] = None,
         auth: bool = True,
     ) -> Dict[str, Any]:
-        return await self.get(f"/players/{player_id}", auth=auth)
+        params: Dict[str, Any] = {}
+        if include:
+            params["include"] = include
+        if server_id:
+            params["filter"] = {"servers": server_id}
+        return await self.get(
+            f"/players/{player_id}",
+            params=params or None,
+            auth=auth,
+        )
+
+    async def quick_match_player_identifiers(
+        self,
+        identifier: str,
+        identifier_types: tuple[str, ...],
+    ) -> Dict[str, Any]:
+        """Match a game identifier to its BattleMetrics player resource."""
+        data = [
+            {
+                "type": "identifier",
+                "attributes": {
+                    "type": identifier_type,
+                    "identifier": identifier,
+                },
+            }
+            for identifier_type in identifier_types
+        ]
+        return await self.request(
+            "POST",
+            "/players/quick-match",
+            json={"data": data},
+            auth=True,
+        )
 
     async def list_players(
         self,

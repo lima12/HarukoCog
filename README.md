@@ -103,8 +103,9 @@ be omitted when unchanged:
 ```
 
 Members can then run `/link` and send the private token in the HLL server's Unit
-or Team chat. See the cog README for database constraints and ingestion
-behavior.
+or Team chat. `/vnstat` shows their linked statistics; its optional `member`
+and `eos_id` fields support other-member and direct game-account lookups. See
+the cog README for database constraints and ingestion behavior.
 
 See [BattleMetric/README.md](BattleMetric/README.md) for all commands and
 authorization details.

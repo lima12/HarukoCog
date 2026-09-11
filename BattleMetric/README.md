@@ -34,6 +34,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `[p]killfeed status` - Authorized member. Show the endpoint, channel, connection-secret status, and pending queue size.
 - `[p]killfeed stop` - Authorized member. Disable the feed and discard queued events.
 - `/link` - Any guild member. Create a private, five-minute token used to verify and link their Discord and HLL accounts.
+- `/vnstat`, `/vnstat member:@member`, or `/vnstat eos_id:EOS_ID` - Any guild member. Show their own, a member's, or a direct game account's HLL statistics.
 
 ## Authorization
 
@@ -216,6 +217,30 @@ endpoint, RCON password, and database credentials are configured.
 Account linking only adds the Discord-to-EOS mapping. Existing `RCON_DATA`
 statistics remain intact when a member links, relinks, unlinks, or requests
 deletion of their Discord mapping.
+
+## Player Statistics
+
+`/vnstat` is public to guild members and supports three lookup forms. Discord
+slash-command options are named, so member and EOS lookups use separate native
+fields:
+
+- `/vnstat` looks up the invoking member's linked Discord ID. If they are not
+  linked, the bot directs them to `/link`.
+- `/vnstat member:@member` looks up another member's linked Discord ID.
+- `/vnstat eos_id:EOS_ID` reads an existing `RCON_DATA` row directly, whether
+  or not that game account has linked Discord.
+
+The embed always reads kills and deaths from PostgreSQL. It uses the most
+recent alias observed by the shared RCON poller when available. With a
+BattleMetrics API token configured, it also matches the EOS identifier to a
+BattleMetrics player and requests that player's time on the guild's configured
+default BattleMetrics server. BattleMetrics names and playtime are cached for
+five minutes. Missing or temporarily unavailable BattleMetrics data is shown
+as unavailable without hiding the locally stored combat statistics.
+
+`Enlisted Date` is the linked member's join date for the Discord server where
+the command is used. A direct EOS lookup that is not linked to a member shows
+that the Discord-specific fields are not linked.
 
 ## Token
 
