@@ -8,6 +8,8 @@ from .api import BattleMetricsClient
 from .authorization import BattleMetricAuthorizationError
 from .commands_mixin import BattleMetricCommandsMixin
 from .module import (
+    HLLDatabaseCommandsMixin,
+    HLLDatabaseModule,
     KillFeedCommandsMixin,
     KillFeedModule,
     ServerInfoCommandsMixin,
@@ -22,12 +24,13 @@ class BattleMetric(
     BattleMetricCommandsMixin,
     ServerInfoCommandsMixin,
     KillFeedCommandsMixin,
+    HLLDatabaseCommandsMixin,
     commands.Cog,
 ):
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "0.4.3"
+    __version__ = "0.5.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -49,21 +52,29 @@ class BattleMetric(
         self.api = BattleMetricsClient()
         self.server_info = ServerInfoModule(self)
         self.kill_feed = KillFeedModule(self)
+        self.hll_database = HLLDatabaseModule(self)
         self.server_info.register_config()
         self.kill_feed.register_config()
+        self.kill_feed.register_log_consumer(
+            self.hll_database.ingest_admin_logs,
+            self.hll_database.should_poll,
+        )
 
     async def cog_load(self) -> None:
         await self._migrate_legacy_api_token()
         self.api.set_token(await self.get_api_token())
         await self.server_info.start()
+        await self.hll_database.start()
         await self.kill_feed.start()
 
     def cog_unload(self) -> None:
         self.server_info.stop()
         self.kill_feed.stop()
+        self.hll_database.stop()
         self.bot.loop.create_task(self.api.close())
 
     async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
+        await self.hll_database.delete_user_data(user_id)
         for guild_id, guild_data in (await self.config.all_guilds()).items():
             authorized_user_ids = guild_data.get("authorized_user_ids", [])
             if user_id not in authorized_user_ids:
@@ -89,6 +100,9 @@ class BattleMetric(
     ) -> None:
         if service_name == self.kill_feed.RCON_SERVICE_NAME:
             self.kill_feed.set_password(api_tokens.get(self.kill_feed.RCON_PASSWORD_NAME))
+            return
+        if service_name == self.hll_database.DB_SERVICE_NAME:
+            await self.hll_database.set_api_tokens(api_tokens)
             return
         if service_name != self.API_SERVICE_NAME:
             return

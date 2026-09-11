@@ -44,7 +44,8 @@ Use `[p]cog list HarukoCog` to see the cogs available from this repository.
 ## BattleMetric
 
 BattleMetric reads server data from the BattleMetrics API, maintains a Server
-Info embed, and can publish a pooled HLL: Vietnam kill feed over direct RCON.
+Info embed, publishes a pooled HLL: Vietnam kill feed over direct RCON, and can
+store verified Discord/EOS links and batched player statistics in PostgreSQL.
 
 After loading, configure the API token as the bot owner in a private channel or
 DM:
@@ -75,7 +76,7 @@ and restart the bot:
 
 ```text
 [p]load downloader
-[p]pipinstall "pydantic>=2.11.5,<2.12" "hllrcon>=2.0.0.4,<2.0.1"
+[p]pipinstall "asyncpg>=0.30,<0.32" "pydantic>=2.11.5,<2.12" "hllrcon>=2.0.0.4,<2.0.1"
 ```
 
 Configure the RCON password in a private channel or DM, then set the HLL:
@@ -89,6 +90,21 @@ Vietnam server's RCON endpoint and feed channel:
 
 The RCON port may differ from the public game/query port. Kill events are
 queued and pooled into at most one Discord embed every three seconds.
+
+Configure PostgreSQL credentials in a private channel or DM, then reload the
+cog. The remaining connection values below match the module defaults and can
+be omitted when unchanged:
+
+```text
+[p]set api battlemetric_db user,DB_USER password,DB_PASSWORD host,162.120.6.39 port,5432 database,slhhll schema,slhhll
+[p]reload BattleMetric
+[p]slash enablecog BattleMetric
+[p]slash sync
+```
+
+Members can then run `/link` and send the private token in the HLL server's Unit
+or Team chat. See the cog README for database constraints and ingestion
+behavior.
 
 See [BattleMetric/README.md](BattleMetric/README.md) for all commands and
 authorization details.

@@ -12,7 +12,7 @@ import logging
 import math
 import time
 from collections import OrderedDict, deque
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, ClassVar
@@ -25,6 +25,9 @@ from redbot.core import commands
 from ..authorization import requires_authorized_user
 
 log = logging.getLogger("red.BattleMetric.kill_feed")
+
+AdminLogConsumer = Callable[[discord.Guild, Sequence[Any]], Awaitable[None]]
+PollPredicate = Callable[[int], bool]
 
 try:
     from hllrcon import HLLVRcon
@@ -125,9 +128,18 @@ class KillFeedModule:
         self._next_poll_at: dict[int, float] = {}
         self._failure_counts: dict[int, int] = {}
         self._dropped_counts: dict[int, int] = {}
+        self._log_consumers: list[tuple[AdminLogConsumer, PollPredicate]] = []
 
     def register_config(self) -> None:
         self.cog.config.register_guild(kill_feed=dict(self._EMPTY_SETTINGS))
+
+    def register_log_consumer(
+        self,
+        consumer: AdminLogConsumer,
+        should_poll: PollPredicate,
+    ) -> None:
+        """Register a module that consumes entries from this shared RCON poll."""
+        self._log_consumers.append((consumer, should_poll))
 
     async def start(self) -> None:
         await self.refresh_password()
@@ -298,19 +310,29 @@ class KillFeedModule:
         now_monotonic = time.monotonic()
         for guild in self.cog.bot.guilds:
             settings = await self.get_settings(guild)
-            if not settings.get("enabled"):
+            feed_enabled = bool(settings.get("enabled"))
+            consumer_enabled = any(
+                should_poll(guild.id) for _, should_poll in self._log_consumers
+            )
+            if not feed_enabled and not consumer_enabled:
                 continue
             if now_monotonic < self._next_poll_at.get(guild.id, 0):
                 continue
             host = settings.get("host")
             port = settings.get("port")
             if isinstance(host, str) and isinstance(port, int):
-                coroutines.append(self._poll_guild(guild, host, port))
+                coroutines.append(self._poll_guild(guild, host, port, feed_enabled))
 
         if coroutines:
             await asyncio.gather(*coroutines)
 
-    async def _poll_guild(self, guild: discord.Guild, host: str, port: int) -> None:
+    async def _poll_guild(
+        self,
+        guild: discord.Guild,
+        host: str,
+        port: int,
+        feed_enabled: bool,
+    ) -> None:
         if not self._password:
             return
 
@@ -341,15 +363,37 @@ class KillFeedModule:
             log.info("HLL: Vietnam RCON polling recovered for guild %s", guild.id)
 
         earliest = previous_poll - timedelta(seconds=self.POLL_INTERVAL_SECONDS)
-        for entry in response.entries:
-            if entry.timestamp < earliest:
-                continue
+        entries = [entry for entry in response.entries if entry.timestamp >= earliest]
+        await self._dispatch_admin_logs(guild, entries)
+        if not feed_enabled:
+            return
+
+        for entry in entries:
             if not isinstance(entry, (HLLVPlayerKillAdminLog, HLLVPlayerTeamKillAdminLog)):
                 continue
             fingerprint = f"{entry.timestamp.isoformat()}\0{entry.raw_message}"
             if not self._mark_seen(guild.id, fingerprint):
                 continue
             self._enqueue(guild.id, self._format_event(entry))
+
+    async def _dispatch_admin_logs(
+        self,
+        guild: discord.Guild,
+        entries: Sequence[Any],
+    ) -> None:
+        for consumer, should_poll in self._log_consumers:
+            if not should_poll(guild.id):
+                continue
+            try:
+                await consumer(guild, entries)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "RCON admin-log consumer %r failed for guild %s",
+                    consumer,
+                    guild.id,
+                )
 
     def _record_poll_failure(self, guild_id: int, exc: Exception) -> None:
         failure_count = self._failure_counts.get(guild_id, 0) + 1

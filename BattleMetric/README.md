@@ -33,6 +33,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `[p]killfeed setup #channel` - Authorized member. Test RCON and enable pooled kill-feed messages in the mentioned channel.
 - `[p]killfeed status` - Authorized member. Show the endpoint, channel, connection-secret status, and pending queue size.
 - `[p]killfeed stop` - Authorized member. Disable the feed and discard queued events.
+- `/link` - Any guild member. Create a private, five-minute token used to verify and link their Discord and HLL accounts.
 
 ## Authorization
 
@@ -150,6 +151,61 @@ as the bot owner and fully restart the Red process. BattleMetric now loads
 without its kill-feed workers when `hllrcon` is broken, allowing Server Info
 and the BattleMetrics API commands to remain available while the dependency is
 repaired.
+
+## HLL Database And Account Linking
+
+The database module uses PostgreSQL through `asyncpg`. Downloader installs the
+dependency with the cog. The database password is never written to Red Config
+or this repository; store it in Red's shared API-token vault from a private
+channel or DM:
+
+```text
+[p]set api battlemetric_db user,DB_USER password,DB_PASSWORD host,162.120.6.39 port,5432 database,slhhll schema,slhhll
+```
+
+Only `user` and `password` are required. Host `162.120.6.39`, port `5432`,
+database `slhhll`, and schema `slhhll` are the defaults. Reload the cog after
+initial configuration:
+
+```text
+[p]reload BattleMetric
+[p]slash enablecog BattleMetric
+[p]slash sync
+```
+
+The slash enable/sync steps are required the first time `/link` is installed.
+Discord may take a few minutes to display a newly synchronized command.
+
+The database role needs `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on
+`slhhll."Discord"` and `slhhll."RCON_DATA"`. The supplied upserts also require
+these database constraints:
+
+- `slhhll."Discord"."Discord_Id"` must be a primary key or unique.
+- `slhhll."Discord"."EOS_Id"` should be unique so one game account cannot be
+  assigned to multiple Discord accounts.
+- `slhhll."RCON_DATA"."EOS_Id"` must be a primary key or unique.
+- If `RCON_DATA.EOS_Id` is a foreign key, it should reference
+  `Discord.EOS_Id`.
+
+Members run `/link` and receive an ephemeral `VN-####` token. They send that
+token in Unit or Team chat on the configured HLL server within five minutes.
+The shared RCON poller reads the player ID from the chat event, performs the
+Discord/EOS upsert in a transaction, burns the token, and sends a confirmation
+DM. If DMs are closed, it posts the result in the channel where `/link` was
+used.
+
+Kill and death records use the same RCON response as the Discord kill feed, so
+the database module does not open a second RCON connection. Records enter a
+bounded `asyncio.Queue` and are committed in one transaction when 50 records
+accumulate or three seconds pass. A failed batch is retained and retried with
+backoff. Overlapping RCON lookbacks and duplicate guild configurations for the
+same endpoint are deduplicated before queueing.
+
+Because `RCON_DATA.EOS_Id` is linked to `Discord.EOS_Id`, only verified EOS IDs
+are written to the statistics table. Events observed before an account is
+linked are not backfilled. Database ingestion continues when the Discord kill
+feed is disabled, provided the RCON endpoint, RCON password, and database
+credentials are configured.
 
 ## Token
 

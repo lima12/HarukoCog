@@ -1,12 +1,12 @@
 {
   "author": ["Haruko"],
   "name": "BattleMetric",
-  "short": "BattleMetrics API and HLL: Vietnam RCON helper cog.",
-  "description": "Modular Redbot cog for BattleMetrics server data, automatic Server Info panels, and a pooled HLL: Vietnam RCON kill feed.",
-  "install_msg": "BattleMetric loaded. Use [p]help battlemetric, [p]help serverinfo, or [p]help killfeed to see commands.",
-  "requirements": ["aiohttp", "pydantic>=2.11.5,<2.12", "hllrcon>=2.0.0.4,<2.0.1"],
-  "tags": ["battlemetrics", "api", "games", "servers", "hll", "rcon"],
+  "short": "BattleMetrics API, HLL RCON, account-link, and stats cog.",
+  "description": "Modular Redbot cog for BattleMetrics server data, Server Info panels, HLL: Vietnam kill feeds, PostgreSQL statistics, and verified Discord-to-EOS account linking.",
+  "install_msg": "BattleMetric loaded. Use [p]help battlemetric, [p]help serverinfo, [p]help killfeed, or /link to see commands.",
+  "requirements": ["aiohttp", "asyncpg>=0.30,<0.32", "pydantic>=2.11.5,<2.12", "hllrcon>=2.0.0.4,<2.0.1"],
+  "tags": ["battlemetrics", "api", "games", "servers", "hll", "rcon", "postgresql"],
   "min_bot_version": "3.5.0",
   "min_python_version": [3, 11, 0],
-  "end_user_data_statement": "Reads global BattleMetrics and HLL RCON secrets from Red's shared API-token storage and stores per-guild settings, including Server Info panel IDs, HLL RCON endpoint and kill-feed channel settings, and authorized Discord user IDs."
+  "end_user_data_statement": "Reads global BattleMetrics, HLL RCON, and PostgreSQL secrets from Red's shared API-token storage; stores per-guild settings and authorized Discord user IDs; and stores verified Discord-to-EOS account links and aggregated HLL kill/death statistics in the configured PostgreSQL database."
 }
