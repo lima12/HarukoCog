@@ -188,6 +188,11 @@ these database constraints:
   `RCON_DATA.EOS_Id`. `RCON_DATA.EOS_Id` must not reference `Discord.EOS_Id`,
   because statistics exist before a Discord account is linked.
 
+Run [`sql/hll_constraints.sql`](sql/hll_constraints.sql) once as the database
+owner to validate existing data, normalize the counter columns, remove the
+reverse foreign key, and install these constraints. The migration is
+transactional and refuses to silently merge duplicate account identifiers.
+
 Members run `/link` and receive an ephemeral `VN-####` token. They send that
 token in Unit or Team chat on the configured HLL server within five minutes.
 The shared RCON poller reads the player ID from the chat event, performs the
