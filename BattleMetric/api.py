@@ -164,6 +164,19 @@ class BattleMetricsClient:
             auth=True,
         )
 
+    async def get_player_server_information(
+        self,
+        player_id: str,
+        server_id: str,
+        *,
+        auth: bool = True,
+    ) -> Dict[str, Any]:
+        """Return one player's cumulative information for a server."""
+        return await self.get(
+            f"/players/{player_id}/servers/{server_id}",
+            auth=auth,
+        )
+
     async def list_players(
         self,
         *,

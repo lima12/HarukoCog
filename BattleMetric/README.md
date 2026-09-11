@@ -233,10 +233,13 @@ fields:
 The embed always reads kills and deaths from PostgreSQL. It uses the most
 recent alias observed by the shared RCON poller when available. With a
 BattleMetrics API token configured, it also matches the EOS identifier to a
-BattleMetrics player and requests that player's time on the guild's configured
-default BattleMetrics server. BattleMetrics names and playtime are cached for
-five minutes. Missing or temporarily unavailable BattleMetrics data is shown
-as unavailable without hiding the locally stored combat statistics.
+BattleMetrics player and requests `playerServerInformation.timePlayed` from
+`/players/{player_id}/servers/{server_id}`. It uses the active Server Info
+panel's pinned server ID, falling back to the guild's configured default
+BattleMetrics server. There is no separate player-stat server setting.
+BattleMetrics names and playtime are cached for five minutes. Missing or
+temporarily unavailable BattleMetrics data is shown as unavailable without
+hiding the locally stored combat statistics.
 
 `Enlisted Date` is the linked member's join date for the Discord server where
 the command is used. A direct EOS lookup that is not linked to a member shows

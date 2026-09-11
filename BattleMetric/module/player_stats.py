@@ -91,8 +91,6 @@ class PlayerStatsModule:
 
         player_document = await self.cog.api.get_player(
             player_id,
-            include="server" if server_id else None,
-            server_id=server_id,
             auth=True,
         )
         player = player_document.get("data")
@@ -103,10 +101,30 @@ class PlayerStatsModule:
         attributes = attributes if isinstance(attributes, Mapping) else {}
         name_value = attributes.get("name")
         name = str(name_value).strip() if name_value else None
+        time_played_seconds = self._time_played(player, server_id)
+        if server_id is not None:
+            try:
+                server_document = await self.cog.api.get_player_server_information(
+                    player_id,
+                    server_id,
+                    auth=True,
+                )
+            except BattleMetricsAPIError as exc:
+                log.warning(
+                    "Could not fetch BattleMetrics server time for player %s on server %s: %s",
+                    player_id,
+                    server_id,
+                    exc,
+                )
+            else:
+                direct_time = self._player_server_time(server_document)
+                if direct_time is not None:
+                    time_played_seconds = direct_time
+
         return BattleMetricsPlayerProfile(
             player_id=player_id,
             name=name,
-            time_played_seconds=self._time_played(player, server_id),
+            time_played_seconds=time_played_seconds,
         )
 
     @staticmethod
@@ -172,6 +190,20 @@ class PlayerStatsModule:
                     return None
                 return max(0, seconds)
         return None
+
+    @staticmethod
+    def _player_server_time(document: Mapping[str, Any]) -> int | None:
+        resource = document.get("data")
+        if not isinstance(resource, Mapping):
+            return None
+        attributes = resource.get("attributes")
+        if not isinstance(attributes, Mapping):
+            return None
+        try:
+            seconds = int(attributes.get("timePlayed"))
+        except (TypeError, ValueError):
+            return None
+        return max(0, seconds)
 
     @classmethod
     def normalize_eos_id(cls, eos_id: str) -> str | None:
@@ -344,7 +376,13 @@ class PlayerStatsCommandsMixin:
         time_played_seconds = None
         battlemetrics_profile = None
         if await self.has_api_token():
-            server_id = await self.get_default_server_id(guild)
+            panel = await self.server_info.get_panel(guild)
+            panel_server_id = panel.get("server_id")
+            server_id = (
+                str(panel_server_id)
+                if panel_server_id
+                else await self.get_default_server_id(guild)
+            )
             try:
                 battlemetrics_profile = (
                     await self.player_stats.get_battlemetrics_profile(
