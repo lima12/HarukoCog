@@ -63,13 +63,13 @@ class PlayerStatsModule:
     FONT_PATH = RESOURCE_DIRECTORY / "Wallpoet-Regular.ttf"
     CARD_TEXT_COLOR: ClassVar[tuple[int, int, int, int]] = (29, 31, 27, 255)
     CARD_SLOTS: ClassVar[dict[str, CardTextSlot]] = {
-        "name": CardTextSlot((200, 240), 370, 28),
-        "date": CardTextSlot((856, 236), 175, 26),
-        "discord_id": CardTextSlot((321, 335), 700, 28),
-        "eos_id": CardTextSlot((321, 425), 700, 28),
-        "kills": CardTextSlot((176, 982), 330, 32),
-        "deaths": CardTextSlot((176, 1118), 330, 32),
-        "time_played": CardTextSlot((176, 1266), 330, 30),
+        "name": CardTextSlot((200, 210), 370, 28),
+        "date": CardTextSlot((856, 206), 175, 26),
+        "discord_id": CardTextSlot((321, 305), 700, 28),
+        "eos_id": CardTextSlot((321, 395), 700, 28),
+        "kills": CardTextSlot((176, 952), 330, 32),
+        "deaths": CardTextSlot((176, 1088), 330, 32),
+        "time_played": CardTextSlot((176, 1236), 330, 30),
     }
 
     def __init__(self, cog: Any):
