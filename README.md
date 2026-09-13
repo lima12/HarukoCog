@@ -131,6 +131,15 @@ Packages range from 100 kills for one day to 36,500 kills for 365 days. The
 database deduction is atomic and only commits after the RCON VIP grant is
 accepted.
 
+Authorized members can preview or purge server VIPs that were not created by
+the kill-exchange purchase flow. Purchased VIPs remain protected, and removals
+are sent through the shared RCON connection at one request every two seconds:
+
+```text
+/hllvn purgevip confirm:false
+/hllvn purgevip confirm:true
+```
+
 For the dog-tag carving site, configure the shared IPC secret and staff review
 channel after deploying `tagweb`:
 

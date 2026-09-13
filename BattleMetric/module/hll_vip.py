@@ -25,6 +25,7 @@ class HLLVIPGrant:
     expires_at: int
     granted_by: int | None
     discord_id: int | None
+    source: str = "manual"
 
     def to_config(self) -> dict[str, int | str | None]:
         return {
@@ -32,6 +33,7 @@ class HLLVIPGrant:
             "expires_at": self.expires_at,
             "granted_by": self.granted_by,
             "discord_id": self.discord_id,
+            "source": self.source,
         }
 
 
@@ -40,6 +42,16 @@ class HLLVIPPackage:
     number: str
     kill_cost: int
     duration_days: int
+
+
+@dataclass(frozen=True)
+class HLLVIPPurgeResult:
+    server_total: int
+    protected_count: int
+    candidates: tuple[str, ...]
+    removed: tuple[str, ...]
+    failed: tuple[str, ...]
+    skipped_invalid: int
 
 
 class HLLVIPPurchaseModal(discord.ui.Modal):
@@ -85,6 +97,9 @@ class HLLVIPModule:
     EXPIRY_INTERVAL_SECONDS = 60
     MIN_DURATION_SECONDS = 60
     MAX_DURATION_SECONDS = 365 * 24 * 60 * 60
+    PURGE_REQUEST_INTERVAL_SECONDS = 2
+    VIP_SOURCE_MANUAL = "manual"
+    VIP_SOURCE_PURCHASE = "purchase"
     EOS_PATTERN = re.compile(r"(?:\d{17}|[0-9a-fA-F]{32})")
     DURATION_PATTERN = re.compile(
         r"^\s*(\d+)\s*(m(?:in(?:ute)?)?s?|h(?:(?:our|r)s?)?|d(?:ay)?s?|w(?:eek)?s?)?\s*$",
@@ -145,12 +160,15 @@ class HLLVIPModule:
         granted_by: int,
         discord_id: int | None,
         extend_existing: bool = False,
+        source: str = VIP_SOURCE_MANUAL,
     ) -> HLLVIPGrant:
         normalized_eos_id = self.normalize_eos_id(eos_id)
         if normalized_eos_id is None:
             raise ValueError("Provide a valid 17-digit or 32-character EOS ID.")
         if not self.MIN_DURATION_SECONDS <= duration_seconds <= self.MAX_DURATION_SECONDS:
             raise ValueError("The VIP duration must be between 1 minute and 365 days.")
+        if source not in {self.VIP_SOURCE_MANUAL, self.VIP_SOURCE_PURCHASE}:
+            raise ValueError("The VIP grant source is invalid.")
 
         eos_id = normalized_eos_id
         async with self._guild_lock(guild.id):
@@ -170,6 +188,7 @@ class HLLVIPModule:
                 expires_at=starts_at + duration_seconds,
                 granted_by=granted_by,
                 discord_id=discord_id,
+                source=source,
             )
             await self.cog.kill_feed.execute_rcon(
                 guild,
@@ -203,6 +222,7 @@ class HLLVIPModule:
                         expires_at=grant.expires_at,
                         granted_by=granted_by,
                         discord_id=discord_id,
+                        source=grant.source,
                     )
                 )
             if changed:
@@ -286,7 +306,7 @@ class HLLVIPModule:
                     )
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - retry independent grants later
                     retained.append(grant)
                     log.warning(
                         "Will retry expired HLL VIP removal for guild %s and EOS %s: %s",
@@ -304,6 +324,94 @@ class HLLVIPModule:
 
             if changed:
                 await self._set_grants(guild, retained)
+
+    async def purge_unmanaged_vips(
+        self,
+        guild: discord.Guild,
+        *,
+        execute: bool,
+    ) -> HLLVIPPurgeResult:
+        """List or remove server VIPs that were not granted by the purchase flow."""
+        async with self._guild_lock(guild.id):
+            grants = await self._get_grants(guild)
+            purchased_ids = {
+                grant.eos_id
+                for grant in grants
+                if grant.source == self.VIP_SOURCE_PURCHASE
+            }
+            response = await self.cog.kill_feed.execute_rcon(
+                guild,
+                "GetVips request",
+                lambda client: client.get_vip_users(),
+            )
+            entries = getattr(response, "vips", None)
+            if not isinstance(entries, (list, tuple)):
+                raise ValueError(  # noqa: TRY004 - invalid remote response, not caller input
+                    "HLL RCON returned an invalid VIP list."
+                )
+
+            server_total = len(entries)
+            protected_count = 0
+            skipped_invalid = 0
+            candidates = []
+            seen_ids = set()
+            for entry in entries:
+                eos_id = self.normalize_eos_id(str(getattr(entry, "id", "")))
+                if eos_id is None:
+                    skipped_invalid += 1
+                    continue
+                if eos_id in seen_ids:
+                    continue
+                seen_ids.add(eos_id)
+                if eos_id in purchased_ids:
+                    protected_count += 1
+                else:
+                    candidates.append(eos_id)
+
+            removed = []
+            failed = []
+            if execute:
+                for index, eos_id in enumerate(candidates):
+                    try:
+                        await self.cog.kill_feed.execute_rcon(
+                            guild,
+                            "RemoveVip request",
+                            lambda client, target=eos_id: client.remove_vip(target),
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - continue independent removals
+                        failed.append(eos_id)
+                        log.warning(
+                            "Could not purge unmanaged HLL VIP %s for guild %s: %s",
+                            eos_id,
+                            guild.id,
+                            exc,
+                        )
+                    else:
+                        removed.append(eos_id)
+
+                    if index + 1 < len(candidates):
+                        await asyncio.sleep(self.PURGE_REQUEST_INTERVAL_SECONDS)
+
+                failed_ids = set(failed)
+                retained_grants = [
+                    grant
+                    for grant in grants
+                    if grant.source == self.VIP_SOURCE_PURCHASE
+                    or grant.eos_id in failed_ids
+                ]
+                if retained_grants != grants:
+                    await self._set_grants(guild, retained_grants)
+
+            return HLLVIPPurgeResult(
+                server_total=server_total,
+                protected_count=protected_count,
+                candidates=tuple(candidates),
+                removed=tuple(removed),
+                failed=tuple(failed),
+                skipped_invalid=skipped_invalid,
+            )
 
     async def _get_grants(self, guild: discord.Guild) -> list[HLLVIPGrant]:
         return self._parse_grants(await self.cog.config.guild(guild).hll_vip_grants())
@@ -332,15 +440,29 @@ class HLLVIPModule:
                 continue
             if eos_id is None or expires_at <= 0:
                 continue
+            # Older records did not store a source. Purchases always record the
+            # buyer as both grantor and recipient, so preserve those conservatively.
             grants.append(
                 HLLVIPGrant(
                     eos_id=eos_id,
                     expires_at=expires_at,
                     granted_by=cls._optional_id(raw.get("granted_by")),
                     discord_id=cls._optional_id(raw.get("discord_id")),
+                    source=cls._grant_source(raw),
                 )
             )
         return grants
+
+    @classmethod
+    def _grant_source(cls, raw: Mapping[str, Any]) -> str:
+        source = str(raw.get("source", "")).strip().lower()
+        if source in {cls.VIP_SOURCE_MANUAL, cls.VIP_SOURCE_PURCHASE}:
+            return source
+        granted_by = cls._optional_id(raw.get("granted_by"))
+        discord_id = cls._optional_id(raw.get("discord_id"))
+        if granted_by is not None and granted_by == discord_id:
+            return cls.VIP_SOURCE_PURCHASE
+        return cls.VIP_SOURCE_MANUAL
 
     def _guild_lock(self, guild_id: int) -> asyncio.Lock:
         return self._guild_locks.setdefault(guild_id, asyncio.Lock())
@@ -388,7 +510,9 @@ class HLLVIPCommandsMixin:
         await interaction.response.defer(thinking=True, ephemeral=True)
         guild = interaction.guild
         if guild is None:
-            await interaction.followup.send("This command can only be used in a server.")
+            await interaction.followup.send(
+                "This command can only be used in a server."
+            )
             return
         if (member is None) == (eos_id is None):
             await interaction.followup.send(
@@ -488,6 +612,139 @@ class HLLVIPCommandsMixin:
             embed=embed,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    @hllvn.command(
+        name="purgevip",
+        description="Remove VIPs that were not granted through the kill exchange.",
+    )
+    @app_commands.describe(
+        confirm="Set true to remove unmanaged VIPs; false performs a dry run.",
+    )
+    @app_commands.guild_only()
+    async def hllvn_purgevip(
+        self,
+        interaction: discord.Interaction,
+        confirm: bool = False,
+    ) -> None:
+        if not await self.is_authorized(interaction.user):
+            await interaction.response.send_message(
+                "You are not authorized to use HLL: Vietnam administration commands.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        guild = interaction.guild
+        if guild is None:
+            await interaction.followup.send(
+                "This command can only be used in a server."
+            )
+            return
+
+        try:
+            result = await self.hll_vip.purge_unmanaged_vips(
+                guild,
+                execute=confirm,
+            )
+        except (ValueError, KillFeedConnectionTestError) as exc:
+            await interaction.followup.send(str(exc))
+            return
+        except RuntimeError:
+            log.exception("HLL VIP purge is unavailable")
+            await interaction.followup.send(
+                "The `hllrcon` dependency is unavailable. Ask the bot owner to "
+                "update the cog dependencies and restart Red."
+            )
+            return
+        except Exception:
+            log.exception("Unexpected HLL VIP purge failure for guild %s", guild.id)
+            await interaction.followup.send(
+                "The VIP purge failed. Ask the bot owner to check the Red service log."
+            )
+            return
+
+        if confirm:
+            embed = discord.Embed(
+                title="HLL VN VIP Purge Complete",
+                description="Purchased VIPs were preserved.",
+                color=(
+                    discord.Color.orange()
+                    if result.failed
+                    else discord.Color.green()
+                ),
+                timestamp=discord.utils.utcnow(),
+            )
+            embed.add_field(
+                name="Server VIPs",
+                value=f"`{result.server_total}`",
+                inline=True,
+            )
+            embed.add_field(
+                name="Protected",
+                value=f"`{result.protected_count}`",
+                inline=True,
+            )
+            embed.add_field(
+                name="Removed",
+                value=f"`{len(result.removed)}`",
+                inline=True,
+            )
+            embed.add_field(
+                name="Failed",
+                value=f"`{len(result.failed)}`",
+                inline=True,
+            )
+            if result.failed:
+                embed.add_field(
+                    name="Failed EOS IDs",
+                    value=self._format_purge_ids(result.failed),
+                    inline=False,
+                )
+        else:
+            embed = discord.Embed(
+                title="HLL VN VIP Purge Preview",
+                description="Dry run only. No VIPs were removed.",
+                color=discord.Color.orange(),
+                timestamp=discord.utils.utcnow(),
+            )
+            embed.add_field(
+                name="Server VIPs",
+                value=f"`{result.server_total}`",
+                inline=True,
+            )
+            embed.add_field(
+                name="Protected",
+                value=f"`{result.protected_count}`",
+                inline=True,
+            )
+            embed.add_field(
+                name="Would Remove",
+                value=f"`{len(result.candidates)}`",
+                inline=True,
+            )
+            if result.candidates:
+                embed.add_field(
+                    name="Unmanaged EOS IDs",
+                    value=self._format_purge_ids(result.candidates),
+                    inline=False,
+                )
+            embed.set_footer(text="Run /hllvn purgevip with confirm:true to execute.")
+
+        if result.skipped_invalid:
+            embed.add_field(
+                name="Skipped Invalid Entries",
+                value=f"`{result.skipped_invalid}`",
+                inline=False,
+            )
+        await interaction.followup.send(embed=embed)
+
+    @staticmethod
+    def _format_purge_ids(eos_ids: tuple[str, ...]) -> str:
+        visible = eos_ids[:20]
+        lines = [f"`{eos_id}`" for eos_id in visible]
+        if len(eos_ids) > len(visible):
+            lines.append(f"...and {len(eos_ids) - len(visible)} more")
+        return "\n".join(lines)
 
     @hllvn.command(
         name="buyvip",
@@ -596,6 +853,7 @@ class HLLVIPCommandsMixin:
                         granted_by=interaction.user.id,
                         discord_id=interaction.user.id,
                         extend_existing=True,
+                        source=self.hll_vip.VIP_SOURCE_PURCHASE,
                     )
         except (ValueError, KillFeedConnectionTestError) as exc:
             await interaction.followup.send(f"{exc}\nNo kills were deducted.")
