@@ -8,7 +8,8 @@ import re
 import secrets
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -129,6 +130,12 @@ class HLLDatabaseModule:
         'FROM slhhll."RCON_DATA" AS r '
         'LEFT JOIN slhhll."Discord" AS d ON d."EOS_Id" = r."EOS_Id" '
         'WHERE r."EOS_Id" = $1 LIMIT 1'
+    )
+    SPEND_KILLS_SQL: ClassVar[str] = (
+        'UPDATE slhhll."RCON_DATA" '
+        'SET "Kill" = COALESCE("Kill", 0) - $2 '
+        'WHERE "EOS_Id" = $1 AND COALESCE("Kill", 0) >= $2 '
+        'RETURNING "Kill"'
     )
 
     def __init__(self, cog: Any):
@@ -314,6 +321,32 @@ class HLLDatabaseModule:
         async with pool.acquire() as connection:
             row = await connection.fetchrow(self.STATS_BY_EOS_SQL, eos_id)
         return self._stats_from_row(row)
+
+    @asynccontextmanager
+    async def spend_kills(
+        self,
+        eos_id: str,
+        amount: int,
+    ) -> AsyncIterator[int | None]:
+        """Reserve kills atomically and commit only if the caller succeeds."""
+        if amount <= 0:
+            raise ValueError("The kill cost must be greater than zero.")
+
+        pool = await self.ensure_ready()
+        async with pool.acquire() as connection, connection.transaction():
+            try:
+                remaining = await connection.fetchval(
+                    self.SPEND_KILLS_SQL,
+                    eos_id,
+                    amount,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                raise HLLDatabaseUnavailableError(
+                    "The HLL kill balance could not be updated."
+                ) from exc
+            yield int(remaining) if remaining is not None else None
 
     def get_cached_alias(self, eos_id: str) -> str | None:
         alias = self._player_aliases.get(eos_id)

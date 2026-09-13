@@ -35,13 +35,16 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `[p]killfeed stop` - Authorized member. Disable the feed and discard queued events.
 - `/hllvn addvip member:@member duration:1d` - Authorized member. Add a linked Discord member to the HLL VIP list for a limited duration.
 - `/hllvn addvip eos_id:EOS_ID duration:1d` - Authorized member. Add a game account directly to the HLL VIP list for a limited duration.
+- `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
 - `/link` - Any guild member. Create a private, five-minute token used to verify and link their Discord and HLL accounts.
 - `/vnstat`, `/vnstat member:@member`, or `/vnstat eos_id:EOS_ID` - Any guild member. Show their own, a member's, or a direct game account's HLL statistics.
 
 ## Authorization
 
-BattleMetric commands are denied by default. A bot owner or member with the
-Administrator or Manage Server permission can grant access with:
+Administrative BattleMetric commands are denied by default. `/link`, `/vnstat`,
+and `/hllvn buyvip` remain available to every guild member. A bot owner or
+member with the Administrator or Manage Server permission can grant
+administrative access with:
 
 ```text
 [p]bm auth add @member
@@ -182,6 +185,25 @@ expires, the cog sends `RemoveVip` over RCON. Failed removals remain stored and
 are retried, including after a cog or bot restart. Re-adding the same EOS ID
 replaces its bot-managed expiration with the new duration.
 
+`/hllvn buyvip` is available to every guild member. It first requires the
+member to have completed `/link`, then opens the private
+`HLLVN VIP EXCHANGE - NO REFUND!!!` modal. Enter one of these package numbers:
+
+| Package | Kill cost | VIP duration |
+| --- | ---: | ---: |
+| `1` | 100 | 1 day |
+| `2` | 1,500 | 15 days |
+| `3` | 3,000 | 30 days |
+| `4` | 36,500 | 365 days |
+
+The link and kill balance are checked again when the modal is submitted. The
+database deduction uses one conditional PostgreSQL update, so simultaneous
+purchases cannot spend the same kills. The transaction commits only after RCON
+accepts the VIP grant; an RCON failure rolls the deduction back. Buying another
+package extends an existing bot-managed VIP expiration so paid time is not
+discarded. Successful exchanges are final and cannot be refunded through the
+bot.
+
 ## HLL Database And Account Linking
 
 The database module uses PostgreSQL through `asyncpg`. Downloader installs the
@@ -203,8 +225,9 @@ initial configuration:
 [p]slash sync
 ```
 
-The slash enable/sync steps are required the first time `/link` is installed.
-Discord may take a few minutes to display a newly synchronized command.
+The slash enable/sync steps are required when these application commands are
+first installed or changed. Discord may take a few minutes to display a newly
+synchronized command.
 
 The database role needs `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on
 `slhhll."Discord"` and `slhhll."RCON_DATA"`. The supplied upserts also require

@@ -35,6 +35,50 @@ class HLLVIPGrant:
         }
 
 
+@dataclass(frozen=True)
+class HLLVIPPackage:
+    number: str
+    kill_cost: int
+    duration_days: int
+
+
+class HLLVIPPurchaseModal(discord.ui.Modal):
+    """Text-entry package picker compatible with Red's discord.py version."""
+
+    def __init__(self, cog: Any):
+        super().__init__(title="HLLVN VIP EXCHANGE - NO REFUND!!!", timeout=300)
+        self.cog = cog
+        self.package = discord.ui.TextInput(
+            label="Package number (1, 2, 3, or 4)",
+            placeholder="1: 100/1d | 2: 1,500/15d | 3: 3,000/30d | 4: 36,500/1yr",
+            min_length=1,
+            max_length=12,
+            required=True,
+        )
+        self.add_item(self.package)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog._complete_hll_vip_purchase(
+            interaction,
+            str(self.package.value),
+        )
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+    ) -> None:
+        log.error(
+            "Unexpected HLL VIP purchase modal failure",
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        message = "The VIP purchase could not be processed. Please try again later."
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+
+
 class HLLVIPModule:
     """Add VIPs immediately and remove them after a persisted expiration."""
 
@@ -51,6 +95,30 @@ class HLLVIPModule:
         "h": 60 * 60,
         "d": 24 * 60 * 60,
         "w": 7 * 24 * 60 * 60,
+    }
+    VIP_PACKAGES: ClassVar[dict[str, HLLVIPPackage]] = {
+        "1": HLLVIPPackage(number="1", kill_cost=100, duration_days=1),
+        "2": HLLVIPPackage(number="2", kill_cost=1500, duration_days=15),
+        "3": HLLVIPPackage(number="3", kill_cost=3000, duration_days=30),
+        "4": HLLVIPPackage(number="4", kill_cost=36500, duration_days=365),
+    }
+    PACKAGE_ALIASES: ClassVar[dict[str, str]] = {
+        "1": "1",
+        "100": "1",
+        "1d": "1",
+        "day": "1",
+        "2": "2",
+        "1500": "2",
+        "15d": "2",
+        "3": "3",
+        "3000": "3",
+        "30d": "3",
+        "4": "4",
+        "36500": "4",
+        "365d": "4",
+        "1y": "4",
+        "1yr": "4",
+        "1year": "4",
     }
 
     def __init__(self, cog: Any):
@@ -76,6 +144,7 @@ class HLLVIPModule:
         duration_seconds: int,
         granted_by: int,
         discord_id: int | None,
+        extend_existing: bool = False,
     ) -> HLLVIPGrant:
         normalized_eos_id = self.normalize_eos_id(eos_id)
         if normalized_eos_id is None:
@@ -84,21 +153,29 @@ class HLLVIPModule:
             raise ValueError("The VIP duration must be between 1 minute and 365 days.")
 
         eos_id = normalized_eos_id
-        expires_at = int(discord.utils.utcnow().timestamp()) + duration_seconds
-        grant = HLLVIPGrant(
-            eos_id=eos_id,
-            expires_at=expires_at,
-            granted_by=granted_by,
-            discord_id=discord_id,
-        )
-
         async with self._guild_lock(guild.id):
+            grants = await self._get_grants(guild)
+            now = int(discord.utils.utcnow().timestamp())
+            current = next(
+                (stored for stored in grants if stored.eos_id == eos_id),
+                None,
+            )
+            starts_at = (
+                max(now, current.expires_at)
+                if extend_existing and current is not None
+                else now
+            )
+            grant = HLLVIPGrant(
+                eos_id=eos_id,
+                expires_at=starts_at + duration_seconds,
+                granted_by=granted_by,
+                discord_id=discord_id,
+            )
             await self.cog.kill_feed.execute_rcon(
                 guild,
                 "AddVip request",
                 lambda client: client.add_vip(eos_id, description),
             )
-            grants = await self._get_grants(guild)
             grants = [stored for stored in grants if stored.eos_id != eos_id]
             grants.append(grant)
             await self._set_grants(guild, grants)
@@ -154,6 +231,12 @@ class HLLVIPModule:
         if not cls.MIN_DURATION_SECONDS <= seconds <= cls.MAX_DURATION_SECONDS:
             return None
         return seconds
+
+    @classmethod
+    def get_vip_package(cls, value: str) -> HLLVIPPackage | None:
+        normalized = value.strip().lower().replace(",", "").replace(" ", "")
+        package_number = cls.PACKAGE_ALIASES.get(normalized)
+        return cls.VIP_PACKAGES.get(package_number) if package_number else None
 
     @staticmethod
     def format_duration(seconds: int) -> str:
@@ -274,7 +357,7 @@ class HLLVIPModule:
 
 
 class HLLVIPCommandsMixin:
-    """Restricted slash commands for HLL: Vietnam server administration."""
+    """Public purchase and restricted administration commands for HLL VIPs."""
 
     hllvn = app_commands.Group(
         name="hllvn",
@@ -405,3 +488,159 @@ class HLLVIPCommandsMixin:
             embed=embed,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    @hllvn.command(
+        name="buyvip",
+        description="Exchange confirmed kills for timed HLL VIP access.",
+    )
+    @app_commands.guild_only()
+    async def hllvn_buyvip(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command can only be used in a server.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            stats = await asyncio.wait_for(
+                self.hll_database.get_stats_by_discord(interaction.user.id),
+                timeout=2,
+            )
+        except TimeoutError:
+            await interaction.response.send_message(
+                "The account-link database took too long to respond. Please try again.",
+                ephemeral=True,
+            )
+            return
+        except HLLDatabaseError as exc:
+            log.warning("Could not check an HLL VIP buyer's account link: %s", exc)
+            await interaction.response.send_message(
+                "The account-link database is temporarily unavailable.",
+                ephemeral=True,
+            )
+            return
+        except Exception:
+            log.exception("Unexpected database failure before opening the HLL VIP modal")
+            await interaction.response.send_message(
+                "Your linked account could not be checked. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        if stats is None:
+            await interaction.response.send_message(
+                "Please use `/link` to link your Discord with your HLL account first.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(HLLVIPPurchaseModal(self))
+
+    async def _complete_hll_vip_purchase(
+        self,
+        interaction: discord.Interaction,
+        package_value: str,
+    ) -> None:
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        guild = interaction.guild
+        if guild is None:
+            await interaction.followup.send("This purchase must be completed in a server.")
+            return
+
+        package = self.hll_vip.get_vip_package(package_value)
+        if package is None:
+            await interaction.followup.send(
+                "Enter package `1`, `2`, `3`, or `4`. Run `/hllvn buyvip` to try again."
+            )
+            return
+
+        try:
+            stats = await self.hll_database.get_stats_by_discord(interaction.user.id)
+        except HLLDatabaseError as exc:
+            log.warning("Could not recheck an HLL VIP buyer's account link: %s", exc)
+            await interaction.followup.send(
+                "The account-link database is temporarily unavailable. No kills were deducted."
+            )
+            return
+        except Exception:
+            log.exception("Unexpected database failure while rechecking an HLL VIP buyer")
+            await interaction.followup.send(
+                "Your linked account could not be checked. No kills were deducted."
+            )
+            return
+
+        if stats is None:
+            await interaction.followup.send(
+                "Please use `/link` to link your Discord with your HLL account first."
+            )
+            return
+
+        duration_seconds = package.duration_days * 24 * 60 * 60
+        display_name = getattr(interaction.user, "display_name", str(interaction.user))
+        safe_name = re.sub(r"[\x00-\x1f\x7f]+", " ", display_name).strip()[:80]
+        grant = None
+        remaining_kills = None
+        try:
+            async with self.hll_database.spend_kills(
+                stats.eos_id,
+                package.kill_cost,
+            ) as remaining_kills:
+                if remaining_kills is not None:
+                    grant = await self.hll_vip.add_vip(
+                        guild,
+                        eos_id=stats.eos_id,
+                        description=f"{safe_name or stats.eos_id} | Kill exchange VIP",
+                        duration_seconds=duration_seconds,
+                        granted_by=interaction.user.id,
+                        discord_id=interaction.user.id,
+                        extend_existing=True,
+                    )
+        except (ValueError, KillFeedConnectionTestError) as exc:
+            await interaction.followup.send(f"{exc}\nNo kills were deducted.")
+            return
+        except HLLDatabaseError as exc:
+            log.warning("Could not complete an HLL VIP kill exchange: %s", exc)
+            await interaction.followup.send(
+                "The kill exchange database update failed. No purchase was completed."
+            )
+            return
+        except Exception:
+            log.exception("Unexpected HLL VIP purchase failure for guild %s", guild.id)
+            await interaction.followup.send(
+                "The VIP purchase could not be completed. Ask an administrator to check the bot log."
+            )
+            return
+
+        if remaining_kills is None:
+            await interaction.followup.send(
+                "You do not have enough confirmed kills for that transaction. "
+                "Go have more fun and come back later."
+            )
+            return
+        if grant is None:
+            log.error("HLL VIP purchase completed without producing a grant for guild %s", guild.id)
+            await interaction.followup.send(
+                "The VIP purchase did not complete correctly. Ask an administrator to check the bot log."
+            )
+            return
+
+        embed = discord.Embed(
+            title="HLLVN VIP Purchase Complete",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(
+            name="Package",
+            value=f"{package.kill_cost:,} kills for {package.duration_days} days",
+            inline=False,
+        )
+        embed.add_field(name="Remaining Kills", value=f"{remaining_kills:,}", inline=True)
+        embed.add_field(
+            name="VIP Expires",
+            value=f"<t:{grant.expires_at}:F>\n<t:{grant.expires_at}:R>",
+            inline=True,
+        )
+        embed.set_footer(text="VIP exchanges are final and non-refundable.")
+        await interaction.followup.send(embed=embed)

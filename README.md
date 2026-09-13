@@ -118,6 +118,17 @@ EOS ID. The duration defaults to one day:
 The cog persists the expiration and removes the VIP through the configured
 RCON connection, retrying later if the server is unavailable.
 
+All linked members can also exchange their confirmed kills through the private
+VIP purchase modal:
+
+```text
+/hllvn buyvip
+```
+
+Packages range from 100 kills for one day to 36,500 kills for 365 days. The
+database deduction is atomic and only commits after the RCON VIP grant is
+accepted.
+
 See [BattleMetric/README.md](BattleMetric/README.md) for all commands and
 authorization details.
 
