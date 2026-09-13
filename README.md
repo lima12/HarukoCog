@@ -107,6 +107,17 @@ or Team chat. `/vnstat` shows their linked statistics; its optional `member`
 and `eos_id` fields support other-member and direct game-account lookups. See
 the cog README for database constraints and ingestion behavior.
 
+Authorized members can add a timed HLL VIP by linked Discord member or direct
+EOS ID. The duration defaults to one day:
+
+```text
+/hllvn addvip member:@member duration:1d
+/hllvn addvip eos_id:EOS_ID duration:1d
+```
+
+The cog persists the expiration and removes the VIP through the configured
+RCON connection, retrying later if the server is unavailable.
+
 See [BattleMetric/README.md](BattleMetric/README.md) for all commands and
 authorization details.
 

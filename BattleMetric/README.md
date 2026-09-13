@@ -33,6 +33,8 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `[p]killfeed setup #channel` - Authorized member. Test RCON and enable pooled kill-feed messages in the mentioned channel.
 - `[p]killfeed status` - Authorized member. Show the endpoint, channel, connection-secret status, and pending queue size.
 - `[p]killfeed stop` - Authorized member. Disable the feed and discard queued events.
+- `/hllvn addvip member:@member duration:1d` - Authorized member. Add a linked Discord member to the HLL VIP list for a limited duration.
+- `/hllvn addvip eos_id:EOS_ID duration:1d` - Authorized member. Add a game account directly to the HLL VIP list for a limited duration.
 - `/link` - Any guild member. Create a private, five-minute token used to verify and link their Discord and HLL accounts.
 - `/vnstat`, `/vnstat member:@member`, or `/vnstat eos_id:EOS_ID` - Any guild member. Show their own, a member's, or a direct game account's HLL statistics.
 
@@ -152,6 +154,33 @@ as the bot owner and fully restart the Red process. BattleMetric now loads
 without its kill-feed workers when `hllrcon` is broken, allowing Server Info
 and the BattleMetrics API commands to remain available while the dependency is
 repaired.
+
+## Timed HLL VIPs
+
+`/hllvn addvip` uses the same HLL: Vietnam RCON endpoint, password, client, and
+connection lock as the kill feed. The RCON endpoint and vault password must be
+configured first, but the Discord kill-feed channel does not need to be
+enabled.
+
+Only members granted access through `[p]bm auth add @member` and bot owners can
+run this command. Choose exactly one slash-command target:
+
+```text
+/hllvn addvip member:@member duration:1d
+/hllvn addvip eos_id:0123456789abcdef0123456789abcdef duration:12h
+```
+
+The `member` form requires an existing `/link` record and resolves the member's
+EOS ID from PostgreSQL. The `eos_id` form accepts a 17-digit or 32-character
+game account ID directly. Duration accepts minutes, hours, days, or weeks, such
+as `30m`, `12h`, `1d`, and `2w`; a number without a unit means days. It defaults
+to one day and is limited to 365 days.
+
+HLL RCON VIP records do not contain an expiration time. The cog stores each
+expiration in per-guild Red Config and checks it every 60 seconds. When a grant
+expires, the cog sends `RemoveVip` over RCON. Failed removals remain stored and
+are retried, including after a cog or bot restart. Re-adding the same EOS ID
+replaces its bot-managed expiration with the new duration.
 
 ## HLL Database And Account Linking
 

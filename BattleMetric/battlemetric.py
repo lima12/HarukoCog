@@ -10,6 +10,8 @@ from .commands_mixin import BattleMetricCommandsMixin
 from .module import (
     HLLDatabaseCommandsMixin,
     HLLDatabaseModule,
+    HLLVIPCommandsMixin,
+    HLLVIPModule,
     KillFeedCommandsMixin,
     KillFeedModule,
     PlayerStatsCommandsMixin,
@@ -28,12 +30,13 @@ class BattleMetric(
     KillFeedCommandsMixin,
     HLLDatabaseCommandsMixin,
     PlayerStatsCommandsMixin,
+    HLLVIPCommandsMixin,
     commands.Cog,
 ):
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "0.7.1"
+    __version__ = "0.8.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -57,8 +60,10 @@ class BattleMetric(
         self.kill_feed = KillFeedModule(self)
         self.hll_database = HLLDatabaseModule(self)
         self.player_stats = PlayerStatsModule(self)
+        self.hll_vip = HLLVIPModule(self)
         self.server_info.register_config()
         self.kill_feed.register_config()
+        self.hll_vip.register_config()
         self.kill_feed.register_log_consumer(
             self.hll_database.ingest_admin_logs,
             self.hll_database.should_poll,
@@ -70,15 +75,18 @@ class BattleMetric(
         await self.server_info.start()
         await self.hll_database.start()
         await self.kill_feed.start()
+        await self.hll_vip.start()
 
     def cog_unload(self) -> None:
         self.server_info.stop()
+        self.hll_vip.stop()
         self.kill_feed.stop()
         self.hll_database.stop()
         self.bot.loop.create_task(self.api.close())
 
     async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
         await self.hll_database.delete_user_data(user_id)
+        await self.hll_vip.delete_user_data(user_id)
         for guild_id, guild_data in (await self.config.all_guilds()).items():
             authorized_user_ids = guild_data.get("authorized_user_ids", [])
             if user_id not in authorized_user_ids:

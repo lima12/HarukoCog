@@ -15,7 +15,7 @@ from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 import discord
 from discord import app_commands
@@ -28,6 +28,7 @@ log = logging.getLogger("red.BattleMetric.kill_feed")
 
 AdminLogConsumer = Callable[[discord.Guild, Sequence[Any]], Awaitable[None]]
 PollPredicate = Callable[[int], bool]
+RconResult = TypeVar("RconResult")
 
 try:
     from hllrcon import HLLVRcon
@@ -280,6 +281,59 @@ class KillFeedModule:
                 self._connection_failure_message(exc, stage)
             ) from exc
 
+    async def execute_rcon(
+        self,
+        guild: discord.Guild,
+        stage: str,
+        operation: Callable[[Any], Awaitable[RconResult]],
+    ) -> RconResult:
+        """Run one command through this guild's shared, serialized RCON client."""
+        if not self.is_available():
+            raise RuntimeError("The hllrcon dependency is unavailable.")
+
+        _install_uvloop_transport_compatibility()
+        await self.refresh_password()
+        settings = await self.get_settings(guild)
+        host = settings.get("host")
+        port = settings.get("port")
+        if not host or port is None:
+            raise ValueError("Configure the RCON host and port first.")
+        if not self._password:
+            raise ValueError("The HLL RCON password is not configured in Red's API-token vault.")
+
+        client, lock = self._get_client(guild.id, host, port, self._password)
+        failure_stage = "RCON V2 handshake"
+        try:
+            async with lock:
+                await asyncio.wait_for(
+                    client.connect(),
+                    timeout=self.RCON_TIMEOUT_SECONDS,
+                )
+                failure_stage = stage
+                return await asyncio.wait_for(
+                    operation(client),
+                    timeout=self.RCON_TIMEOUT_SECONDS,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            client.disconnect()
+            current = self._clients.get(guild.id)
+            if current is not None and current[1] is client:
+                self._clients.pop(guild.id, None)
+                self._client_locks.pop(guild.id, None)
+            log.warning(
+                "HLL: Vietnam RCON command failed for guild %s during %s (%s): %s",
+                guild.id,
+                failure_stage,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise KillFeedConnectionTestError(
+                self._connection_failure_message(exc, failure_stage)
+            ) from exc
+
     @tasks.loop(seconds=POLL_INTERVAL_SECONDS)
     async def log_poller(self) -> None:
         try:
@@ -498,7 +552,7 @@ class KillFeedModule:
                 )
             return (
                 "RCON authenticated, but the server closed the connection before it answered "
-                "GetAdminLog. Temporarily disconnect other RCON clients and try again."
+                f"{stage}. Temporarily disconnect other RCON clients and try again."
             )
 
         if isinstance(exc, TimeoutError):
