@@ -333,9 +333,11 @@ approving a newer upload. Approval atomically moves the overlay to
 `/home/phuled/SLHTAG/{discord_id}.png`; denial deletes the staged file.
 
 When `/vnstat` renders a linked account, the cog layers an approved overlay
-over `/home/phuled/SLHTAG/dogtag.png`, scales the result to 412 by 200 pixels,
-and places it in `(612, 900)-(1024, 1100)` on the stat card. A missing or
-invalid overlay does not prevent the remaining card from rendering.
+over `/home/phuled/SLHTAG/dogtag.png`, crops the transparent canvas margins,
+and aspect-fits the visible tag inside `(612, 900)-(1024, 1100)` on the stat
+card. This keeps the metal plate proportional while making better use of the
+available space. A missing or invalid overlay does not prevent the remaining
+card from rendering.
 
 The storage path defaults to `/home/phuled/SLHTAG`. Set
 `HLLVN_TAG_STORAGE` for both Red and `tagweb` before startup to use another

@@ -316,11 +316,32 @@ class DogTagModule:
                     tag.close()
                     tag = composite
 
-            resized = tag.resize((x2 - x1, y2 - y1), Image.Resampling.LANCZOS)
+            alpha_bounds = tag.getchannel("A").getbbox()
+            if alpha_bounds is None:
+                return stats_image
+            visible_tag = tag.crop(alpha_bounds)
             try:
-                stats_image.paste(resized, (x1, y1), resized)
+                target_width = x2 - x1
+                target_height = y2 - y1
+                scale = min(
+                    target_width / visible_tag.width,
+                    target_height / visible_tag.height,
+                )
+                fitted_size = (
+                    max(1, round(visible_tag.width * scale)),
+                    max(1, round(visible_tag.height * scale)),
+                )
+                resized = visible_tag.resize(fitted_size, Image.Resampling.LANCZOS)
+                try:
+                    position = (
+                        x1 + (target_width - resized.width) // 2,
+                        y1 + (target_height - resized.height) // 2,
+                    )
+                    stats_image.paste(resized, position, resized)
+                finally:
+                    resized.close()
             finally:
-                resized.close()
+                visible_tag.close()
         finally:
             tag.close()
         return stats_image
