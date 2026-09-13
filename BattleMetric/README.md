@@ -35,7 +35,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `[p]killfeed stop` - Authorized member. Disable the feed and discard queued events.
 - `/hllvn addvip member:@member duration:1d` - Authorized member. Add a linked Discord member to the HLL VIP list for a limited duration.
 - `/hllvn addvip eos_id:EOS_ID duration:1d` - Authorized member. Add a game account directly to the HLL VIP list for a limited duration.
-- `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not controlled by the kill-exchange purchase flow.
+- `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
 - `[p]dogtag setup #channel` - Authorized member. Set the staff review channel for custom dog-tag submissions.
@@ -208,18 +208,13 @@ package extends an existing bot-managed VIP expiration so paid time is not
 discarded. Successful exchanges are final and cannot be refunded through the
 bot.
 
-`/hllvn purgevip` compares the server's current VIP list with purchase-sourced
-grants stored by `/hllvn buyvip`. The default `confirm:false` is a dry run.
-With `confirm:true`, it removes admin-added, control-panel, and other unmanaged
-VIPs while preserving purchased VIPs. Each removal is serialized through the
-same RCON connection lock and spaced two seconds apart; the command does not
+`/hllvn purgevip` compares the server's current VIP list with all timed grants
+stored by the cog. The default `confirm:false` is a dry run. With `confirm:true`,
+it removes control-panel and other external VIPs while preserving every grant
+tracked by `/hllvn addvip` or `/hllvn buyvip`. Each removal is serialized through
+the same RCON connection lock and spaced two seconds apart; the command does not
 call BattleMetrics. Failed removals are reported once and are not retried in a
-tight loop. Manual timed-grant records are removed locally after a successful
-purge, while failed records remain available for a later retry.
-
-Grant records created before source tracking are migrated conservatively. A
-legacy record whose grantor and linked recipient are the same Discord account
-is treated as a purchase, matching the behavior of `/hllvn buyvip`.
+tight loop.
 
 ## HLL Database And Account Linking
 

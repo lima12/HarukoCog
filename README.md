@@ -131,9 +131,10 @@ Packages range from 100 kills for one day to 36,500 kills for 365 days. The
 database deduction is atomic and only commits after the RCON VIP grant is
 accepted.
 
-Authorized members can preview or purge server VIPs that were not created by
-the kill-exchange purchase flow. Purchased VIPs remain protected, and removals
-are sent through the shared RCON connection at one request every two seconds:
+Authorized members can preview or purge server VIPs that are not tracked by the
+cog. VIPs created by either `/hllvn addvip` or `/hllvn buyvip` remain protected,
+and removals are sent through the shared RCON connection at one request every
+two seconds:
 
 ```text
 /hllvn purgevip confirm:false
