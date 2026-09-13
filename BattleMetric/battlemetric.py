@@ -8,6 +8,8 @@ from .api import BattleMetricsClient
 from .authorization import BattleMetricAuthorizationError
 from .commands_mixin import BattleMetricCommandsMixin
 from .module import (
+    DogTagCommandsMixin,
+    DogTagModule,
     HLLDatabaseCommandsMixin,
     HLLDatabaseModule,
     HLLVIPCommandsMixin,
@@ -31,12 +33,13 @@ class BattleMetric(
     HLLDatabaseCommandsMixin,
     PlayerStatsCommandsMixin,
     HLLVIPCommandsMixin,
+    DogTagCommandsMixin,
     commands.Cog,
 ):
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "0.9.0"
+    __version__ = "1.0.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -61,9 +64,11 @@ class BattleMetric(
         self.hll_database = HLLDatabaseModule(self)
         self.player_stats = PlayerStatsModule(self)
         self.hll_vip = HLLVIPModule(self)
+        self.dog_tags = DogTagModule(self)
         self.server_info.register_config()
         self.kill_feed.register_config()
         self.hll_vip.register_config()
+        self.dog_tags.register_config()
         self.kill_feed.register_log_consumer(
             self.hll_database.ingest_admin_logs,
             self.hll_database.should_poll,
@@ -76,10 +81,12 @@ class BattleMetric(
         await self.hll_database.start()
         await self.kill_feed.start()
         await self.hll_vip.start()
+        await self.dog_tags.start()
 
     def cog_unload(self) -> None:
         self.server_info.stop()
         self.hll_vip.stop()
+        self.bot.loop.create_task(self.dog_tags.stop())
         self.kill_feed.stop()
         self.hll_database.stop()
         self.bot.loop.create_task(self.api.close())
@@ -87,6 +94,7 @@ class BattleMetric(
     async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
         await self.hll_database.delete_user_data(user_id)
         await self.hll_vip.delete_user_data(user_id)
+        await self.dog_tags.delete_user_data(user_id)
         for guild_id, guild_data in (await self.config.all_guilds()).items():
             authorized_user_ids = guild_data.get("authorized_user_ids", [])
             if user_id not in authorized_user_ids:
@@ -110,6 +118,11 @@ class BattleMetric(
         service_name: str,
         api_tokens: Mapping[str, str],
     ) -> None:
+        if service_name == self.dog_tags.IPC_SERVICE_NAME:
+            await self.dog_tags.restart_ipc(
+                api_tokens.get(self.dog_tags.IPC_SECRET_NAME)
+            )
+            return
         if service_name == self.kill_feed.RCON_SERVICE_NAME:
             self.kill_feed.set_password(api_tokens.get(self.kill_feed.RCON_PASSWORD_NAME))
             return

@@ -46,6 +46,8 @@ Use `[p]cog list HarukoCog` to see the cogs available from this repository.
 BattleMetric reads server data from the BattleMetrics API, maintains a Server
 Info embed, publishes a pooled HLL: Vietnam kill feed over direct RCON, and can
 store verified Discord/EOS links and batched player statistics in PostgreSQL.
+It also reviews custom dog-tag carvings from the sibling `tagweb` service and
+composites approved tags onto `/vnstat` cards.
 
 After loading, configure the API token as the bot owner in a private channel or
 DM:
@@ -128,6 +130,18 @@ VIP purchase modal:
 Packages range from 100 kills for one day to 36,500 kills for 365 days. The
 database deduction is atomic and only commits after the RCON VIP grant is
 accepted.
+
+For the dog-tag carving site, configure the shared IPC secret and staff review
+channel after deploying `tagweb`:
+
+```text
+[p]set api tagweb ipc_secret,SAME_RANDOM_SECRET_USED_BY_TAGWEB
+[p]dogtag setup #dog-tag-review
+[p]dogtag status
+```
+
+See the cog README and `tagweb/README.md` deployment bundle for storage,
+Discord OAuth2, systemd, and Nginx configuration.
 
 See [BattleMetric/README.md](BattleMetric/README.md) for all commands and
 authorization details.

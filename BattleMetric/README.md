@@ -36,6 +36,8 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn addvip member:@member duration:1d` - Authorized member. Add a linked Discord member to the HLL VIP list for a limited duration.
 - `/hllvn addvip eos_id:EOS_ID duration:1d` - Authorized member. Add a game account directly to the HLL VIP list for a limited duration.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
+- `[p]dogtag setup #channel` - Authorized member. Set the staff review channel for custom dog-tag submissions.
+- `[p]dogtag status` - Authorized member. Show storage, IPC, and pending-review status.
 - `/link` - Any guild member. Create a private, five-minute token used to verify and link their Discord and HLL accounts.
 - `/vnstat`, `/vnstat member:@member`, or `/vnstat eos_id:EOS_ID` - Any guild member. Show their own, a member's, or a direct game account's HLL statistics.
 
@@ -303,6 +305,44 @@ embed while retaining the same values as searchable embed fields. Rendering
 runs outside the bot event loop. If the image assets or Pillow cannot be
 loaded, the command logs the failure and sends the text-field embed without the
 image.
+
+## Custom Dog Tags
+
+The sibling `tagweb` service authenticates carvers through Discord OAuth2,
+stages a validated transparent PNG in `/home/phuled/SLHTAG/staging`, and
+notifies BattleMetric through an authenticated listener on `127.0.0.1:8765`.
+Configure the shared secret from a private channel or DM:
+
+```text
+[p]set api tagweb ipc_secret,SAME_RANDOM_SECRET_USED_BY_TAGWEB
+```
+
+An authorized member configures the staff channel and checks readiness:
+
+```text
+[p]dogtag setup #dog-tag-review
+[p]dogtag status
+```
+
+Approve and Deny buttons are restricted to bot owners and members authorized
+through `[p]bm auth add @member`. Pending review metadata is stored in Red
+Config, and persistent button handlers are restored after a restart. A new
+submission from the same user supersedes the prior review. Each review is bound
+to the staged file's SHA-256 identifier, preventing an older button from
+approving a newer upload. Approval atomically moves the overlay to
+`/home/phuled/SLHTAG/{discord_id}.png`; denial deletes the staged file.
+
+When `/vnstat` renders a linked account, the cog layers an approved overlay
+over `/home/phuled/SLHTAG/dogtag.png`, scales the result to 412 by 200 pixels,
+and places it in `(612, 900)-(1024, 1100)` on the stat card. A missing or
+invalid overlay does not prevent the remaining card from rendering.
+
+The storage path defaults to `/home/phuled/SLHTAG`. Set
+`HLLVN_TAG_STORAGE` for both Red and `tagweb` before startup to use another
+path. Red's listener can be changed with `HLLVN_TAG_IPC_HOST` and
+`HLLVN_TAG_IPC_PORT`; keep it on localhost. See the sibling
+`tagweb/README.md` deployment bundle for OAuth, systemd, Nginx, permissions,
+and dependencies.
 
 Downloader installs the `Pillow` Python package from `info.json`. Current
 Ubuntu systems normally receive a prebuilt Pillow wheel and need no additional

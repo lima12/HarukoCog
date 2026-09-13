@@ -363,6 +363,11 @@ class PlayerStatsModule:
                 fill=self.CARD_TEXT_COLOR,
             )
 
+        try:
+            self.cog.dog_tags.compose_onto_stats(image, stats.discord_id)
+        except Exception:
+            log.exception("Could not composite the HLL VN dog tag onto the stat card")
+
         output = io.BytesIO()
         try:
             image.save(output, format="PNG", compress_level=6)
