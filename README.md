@@ -93,6 +93,20 @@ Vietnam server's RCON endpoint and feed channel:
 The RCON port may differ from the public game/query port. Kill events are
 queued and pooled into at most one Discord embed every three seconds.
 
+Authorized members can enable fourth-point protection for seeding. Choose
+whether offenders receive a five-second warning before they are killed or are
+punished immediately:
+
+```text
+/hllvn seeding min_players:40 penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
+```
+
+The rule checks player count and match status every 60 seconds, then polls
+positions every three seconds only while protection is active. It enforces only
+on Warfare while population is at or below the threshold, automatically
+suspends above it, and resumes if population later drops. Use the same command
+with the `Disable` choice to turn the feature off completely.
+
 Configure PostgreSQL credentials in a private channel or DM, then reload the
 cog. The remaining connection values below match the module defaults and can
 be omitted when unchanged:

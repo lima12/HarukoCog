@@ -12,6 +12,8 @@ from .module import (
     DogTagModule,
     HLLDatabaseCommandsMixin,
     HLLDatabaseModule,
+    HLLSeedingCommandsMixin,
+    HLLSeedingModule,
     HLLVIPCommandsMixin,
     HLLVIPModule,
     KillFeedCommandsMixin,
@@ -33,13 +35,14 @@ class BattleMetric(
     HLLDatabaseCommandsMixin,
     PlayerStatsCommandsMixin,
     HLLVIPCommandsMixin,
+    HLLSeedingCommandsMixin,
     DogTagCommandsMixin,
     commands.Cog,
 ):
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.1.1"
+    __version__ = "1.2.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -64,10 +67,12 @@ class BattleMetric(
         self.hll_database = HLLDatabaseModule(self)
         self.player_stats = PlayerStatsModule(self)
         self.hll_vip = HLLVIPModule(self)
+        self.seeding = HLLSeedingModule(self)
         self.dog_tags = DogTagModule(self)
         self.server_info.register_config()
         self.kill_feed.register_config()
         self.hll_vip.register_config()
+        self.seeding.register_config()
         self.dog_tags.register_config()
         self.kill_feed.register_log_consumer(
             self.hll_database.ingest_admin_logs,
@@ -81,11 +86,13 @@ class BattleMetric(
         await self.hll_database.start()
         await self.kill_feed.start()
         await self.hll_vip.start()
+        await self.seeding.start()
         await self.dog_tags.start()
 
     def cog_unload(self) -> None:
         self.server_info.stop()
         self.hll_vip.stop()
+        self.seeding.stop()
         self.bot.loop.create_task(self.dog_tags.stop())
         self.kill_feed.stop()
         self.hll_database.stop()

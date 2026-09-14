@@ -37,6 +37,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn addvip eos_id:EOS_ID duration:1d` - Authorized member. Add a game account directly to the HLL VIP list for a limited duration.
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
+- `/hllvn seeding min_players:40 penalty_type:<choice> toggle:<choice>` - Authorized member. Configure automatic fourth-point protection during seeding.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
 - `[p]dogtag setup #channel` - Authorized member. Set the staff review channel for custom dog-tag submissions.
 - `[p]dogtag status` - Authorized member. Show storage, IPC, and pending-review status.
@@ -161,6 +162,50 @@ as the bot owner and fully restart the Red process. BattleMetric now loads
 without its kill-feed workers when `hllrcon` is broken, allowing Server Info
 and the BattleMetrics API commands to remain available while the dependency is
 repaired.
+
+## Fourth-Point Seeding Protection
+
+Only bot owners and members authorized through `[p]bm auth add @member` can
+configure this rule. It uses the same HLL: Vietnam RCON endpoint, password,
+client, and connection lock as the kill feed. The Discord kill-feed channel
+does not need to be enabled.
+
+Configure the maximum seeding population, penalty behavior, and toggle through
+the slash-command choices:
+
+```text
+/hllvn seeding min_players:40 penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
+/hllvn seeding min_players:40 penalty_type:"Punish immediately" toggle:Enable
+/hllvn seeding min_players:40 penalty_type:"Warning for 5 seconds, then punish" toggle:Disable
+```
+
+While enabled, enforcement is active only on Warfare layers when the current
+population is at or below `min_players`. It automatically suspends above the
+threshold or outside Warfare, then resumes if the population drops or Warfare
+starts again. The saved toggle remains enabled so staff do not have to
+reconfigure it for every seeding period.
+
+The worker protects both teams: Allies/South players are stopped in the fourth
+sector along their attack direction, and Axis/North players are stopped in the
+opposite fourth sector. Mirrored map direction is handled from `hllrcon` map
+metadata. Dead, unassigned, and defending players are ignored. The current
+RCON response does not identify which one of a sector's possible strongpoints
+is active, so the complete fourth capture sector is protected. This prevents a
+capture reliably and avoids guessing the active point.
+
+With warning-to-punish selected, a violating player receives an RCON warning
+approximately once per second for at least five seconds. They are killed only
+after a fresh position scan confirms they are still in the protected sector.
+Immediate punishment skips the warning period. A player is not punished again
+until a scan observes them leave the sector and later return.
+
+Player count and match status are checked once every 60 seconds. Player-position
+requests run every three seconds only while the cached status says protection
+is active. This means crossing the configured population threshold can take up
+to 60 seconds to suspend or resume enforcement. Warnings and punishments are
+serialized through the shared RCON lock, capped at 20 actions per worker pass,
+and position-request failures back off to 60 seconds. This module does not call
+BattleMetrics and sends no periodic Discord messages.
 
 ## Timed HLL VIPs
 

@@ -5,6 +5,7 @@ from .hll_database import HLLDatabaseCommandsMixin, HLLDatabaseModule
 from .hll_vip import HLLVIPCommandsMixin, HLLVIPModule
 from .kill_feed import KillFeedCommandsMixin, KillFeedModule
 from .player_stats import PlayerStatsCommandsMixin, PlayerStatsModule
+from .seeding import HLLSeedingCommandsMixin, HLLSeedingModule
 from .server_info import ServerInfoCommandsMixin, ServerInfoModule
 
 __all__ = (
@@ -12,6 +13,8 @@ __all__ = (
     "DogTagModule",
     "HLLDatabaseCommandsMixin",
     "HLLDatabaseModule",
+    "HLLSeedingCommandsMixin",
+    "HLLSeedingModule",
     "HLLVIPCommandsMixin",
     "HLLVIPModule",
     "KillFeedCommandsMixin",

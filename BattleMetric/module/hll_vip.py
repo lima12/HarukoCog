@@ -14,6 +14,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from .hll_database import HLLDatabaseError
+from .hll_group import HLLVN_COMMAND_GROUP
 from .kill_feed import KillFeedConnectionTestError
 
 log = logging.getLogger("red.BattleMetric.hll_vip")
@@ -444,10 +445,7 @@ class HLLVIPModule:
 class HLLVIPCommandsMixin:
     """Public purchase and restricted administration commands for HLL VIPs."""
 
-    hllvn = app_commands.Group(
-        name="hllvn",
-        description="Manage the HLL: Vietnam server.",
-    )
+    hllvn = HLLVN_COMMAND_GROUP
 
     @hllvn.command(name="addvip", description="Add a timed VIP through HLL RCON.")
     @app_commands.describe(
