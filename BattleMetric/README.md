@@ -38,6 +38,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
 - `/hllvn seeding min_players:40 penalty_type:<choice> toggle:<choice>` - Authorized member. Configure automatic fourth-point protection during seeding.
+- `/hllvn hqprotection penalty_type:<choice> toggle:<choice>` - Authorized member. Protect each team's locked HQ sector from enemies.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
 - `[p]dogtag setup #channel` - Authorized member. Set the staff review channel for custom dog-tag submissions.
 - `[p]dogtag status` - Authorized member. Show storage, IPC, and pending-review status.
@@ -203,9 +204,43 @@ Player count and match status are checked once every 60 seconds. Player-position
 requests run every three seconds only while the cached status says protection
 is active. This means crossing the configured population threshold can take up
 to 60 seconds to suspend or resume enforcement. Warnings and punishments are
-serialized through the shared RCON lock, capped at 20 actions per worker pass,
-and position-request failures back off to 60 seconds. This module does not call
-BattleMetrics and sends no periodic Discord messages.
+serialized through the shared RCON lock, capped at 20 actions per rule in each
+worker pass, and position-request failures back off to 60 seconds. This module
+does not call BattleMetrics and sends no periodic Discord messages.
+
+## HQ Protection
+
+`/hllvn hqprotection` is restricted to bot owners and members authorized with
+`[p]bm auth add @member`. It shares the seeding worker, status cache, player
+position response, RCON connection, and connection lock, so enabling both
+features does not create duplicate polling loops.
+
+```text
+/hllvn hqprotection penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
+/hllvn hqprotection penalty_type:"Punish immediately" toggle:Enable
+/hllvn hqprotection penalty_type:"Warning for 5 seconds, then punish" toggle:Disable
+```
+
+The rule runs on Warfare layers and protects both sides. On normal maps,
+Axis/North players are violations inside the Allies/South home sector, while
+Allies/South players are violations inside the Axis/North home sector. That
+mapping reverses automatically on mirrored maps. Defenders, dead players, and
+unassigned players are ignored.
+
+HLL RCON exposes player positions and sector geometry but not the individual HQ
+spawn locations. For predictable enforcement, this command protects the
+complete home HQ sector rather than guessing a radius around each spawn. A
+side's protection automatically unlocks when the enemy controls four
+objectives, allowing the final objective to be attacked normally. Objective
+scores come from the shared 60-second status cache, so an unlock can take up to
+60 seconds to be observed.
+
+Warning-to-punish sends an RCON warning approximately once per second for at
+least five seconds, then requires a fresh position scan before killing the
+player. Immediate punishment skips the warning period. The shared player list
+is requested every three seconds only while seeding or HQ protection is active;
+the command sends no periodic Discord messages and makes no BattleMetrics API
+calls.
 
 ## Timed HLL VIPs
 

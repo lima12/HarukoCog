@@ -1,4 +1,4 @@
-"""Dependency-free fourth-point seeding rule evaluation."""
+"""Dependency-free HLL territory-protection rule evaluation."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def find_fourth_point_offenders(
             "The current Warfare layer is not recognized by the installed hllrcon version."
         ) from exc
 
-    if len(sectors) < 4:
+    if len(sectors) < 5:
         raise SeedingRuleError(
             "The current Warfare layer does not expose five capture sectors."
         )
@@ -85,3 +85,84 @@ def find_fourth_point_offenders(
         )
 
     return tuple(offenders)
+
+
+def find_hq_offenders(
+    session: Any,
+    players: Iterable[Any],
+) -> tuple[SeedingOffender, ...]:
+    """Return enemies inside a locked home-HQ sector on a Warfare layer."""
+    if get_game_mode_id(session) != "warfare":
+        return ()
+
+    try:
+        layer = session.find_layer()
+        sectors = layer.sectors
+        mirrored = bool(layer.map.is_mirrored)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise SeedingRuleError(
+            "The current Warfare layer is not recognized by the installed hllrcon version."
+        ) from exc
+
+    if len(sectors) < 5:
+        raise SeedingRuleError(
+            "The current Warfare layer does not expose five capture sectors."
+        )
+
+    allies_home = sectors[4] if mirrored else sectors[0]
+    axis_home = sectors[0] if mirrored else sectors[4]
+    target_by_attacking_team = {
+        1: axis_home,
+        2: allies_home,
+    }
+    score_by_attacking_team = {
+        1: _nonnegative_int(getattr(session, "allied_score", 0)),
+        2: _nonnegative_int(getattr(session, "axis_score", 0)),
+    }
+
+    offenders: list[SeedingOffender] = []
+    for player in players:
+        position = getattr(player, "world_position", None)
+        if position is None:
+            continue
+        try:
+            world_position = tuple(float(value) for value in position)
+        except (TypeError, ValueError):
+            continue
+        if len(world_position) < 3 or world_position[:3] == (0.0, 0.0, 0.0):
+            continue
+
+        try:
+            faction = player.faction
+            team_id = int(faction.team.id) if faction is not None else 0
+        except (AttributeError, TypeError, ValueError):
+            continue
+        target = target_by_attacking_team.get(team_id)
+        if (
+            target is None
+            or score_by_attacking_team.get(team_id, 0) >= 4
+            or not target.is_inside(world_position[:2])
+        ):
+            continue
+
+        player_id = str(getattr(player, "id", "")).strip()
+        if not player_id:
+            continue
+        offenders.append(
+            SeedingOffender(
+                player_id=player_id,
+                player_name=str(getattr(player, "name", player_id)).strip() or player_id,
+                team_id=team_id,
+            )
+        )
+
+    return tuple(offenders)
+
+
+def _nonnegative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0

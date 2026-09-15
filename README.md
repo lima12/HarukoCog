@@ -107,6 +107,19 @@ on Warfare while population is at or below the threshold, automatically
 suspends above it, and resumes if population later drops. Use the same command
 with the `Disable` choice to turn the feature off completely.
 
+Authorized members can also protect both teams' locked HQ sectors from enemy
+spawn killing:
+
+```text
+/hllvn hqprotection penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
+```
+
+HQ protection shares the seeding worker and RCON polling. It runs on Warfare,
+handles mirrored maps, and releases a team's HQ sector when the enemy controls
+four objectives so the final point remains playable. Because RCON does not
+expose individual HQ spawn coordinates, the complete locked home sector is
+protected.
+
 Configure PostgreSQL credentials in a private channel or DM, then reload the
 cog. The remaining connection values below match the module defaults and can
 be omitted when unchanged:
