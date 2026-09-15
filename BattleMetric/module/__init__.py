@@ -1,5 +1,6 @@
 """Feature modules for the BattleMetric cog."""
 
+from .admin_ping import HLLAdminPingCommandsMixin, HLLAdminPingModule
 from .dog_tags import DogTagCommandsMixin, DogTagModule
 from .hll_database import HLLDatabaseCommandsMixin, HLLDatabaseModule
 from .hll_vip import HLLVIPCommandsMixin, HLLVIPModule
@@ -11,6 +12,8 @@ from .server_info import ServerInfoCommandsMixin, ServerInfoModule
 __all__ = (
     "DogTagCommandsMixin",
     "DogTagModule",
+    "HLLAdminPingCommandsMixin",
+    "HLLAdminPingModule",
     "HLLDatabaseCommandsMixin",
     "HLLDatabaseModule",
     "HLLSeedingCommandsMixin",

@@ -10,6 +10,8 @@ from .commands_mixin import BattleMetricCommandsMixin
 from .module import (
     DogTagCommandsMixin,
     DogTagModule,
+    HLLAdminPingCommandsMixin,
+    HLLAdminPingModule,
     HLLDatabaseCommandsMixin,
     HLLDatabaseModule,
     HLLSeedingCommandsMixin,
@@ -35,6 +37,7 @@ class BattleMetric(
     HLLDatabaseCommandsMixin,
     PlayerStatsCommandsMixin,
     HLLVIPCommandsMixin,
+    HLLAdminPingCommandsMixin,
     HLLSeedingCommandsMixin,
     DogTagCommandsMixin,
     commands.Cog,
@@ -42,7 +45,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.4.0"
+    __version__ = "1.5.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -67,11 +70,13 @@ class BattleMetric(
         self.hll_database = HLLDatabaseModule(self)
         self.player_stats = PlayerStatsModule(self)
         self.hll_vip = HLLVIPModule(self)
+        self.admin_ping = HLLAdminPingModule(self)
         self.seeding = HLLSeedingModule(self)
         self.dog_tags = DogTagModule(self)
         self.server_info.register_config()
         self.kill_feed.register_config()
         self.hll_vip.register_config()
+        self.admin_ping.register_config()
         self.seeding.register_config()
         self.dog_tags.register_config()
         self.kill_feed.register_log_consumer(
@@ -82,6 +87,10 @@ class BattleMetric(
             self.hll_vip.ingest_admin_logs,
             self.hll_vip.should_poll,
         )
+        self.kill_feed.register_log_consumer(
+            self.admin_ping.ingest_admin_logs,
+            self.admin_ping.should_poll,
+        )
 
     async def cog_load(self) -> None:
         await self._migrate_legacy_api_token()
@@ -90,12 +99,14 @@ class BattleMetric(
         await self.hll_database.start()
         await self.kill_feed.start()
         await self.hll_vip.start()
+        await self.admin_ping.start()
         await self.seeding.start()
         await self.dog_tags.start()
 
     def cog_unload(self) -> None:
         self.server_info.stop()
         self.hll_vip.stop()
+        self.admin_ping.stop()
         self.seeding.stop()
         self.bot.loop.create_task(self.dog_tags.stop())
         self.kill_feed.stop()

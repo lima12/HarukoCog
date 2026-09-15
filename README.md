@@ -179,6 +179,18 @@ VIPs switch immediately, which kills a living soldier; non-VIPs receive a
 private rejection. Repeated requests from the same player are silently ignored
 for 90 seconds.
 
+Authorized members can route in-game admin requests to a Discord role. Run the
+enable command in the channel that should receive alerts:
+
+```text
+/hllvn adminping role:@HLL-Admin toggle:Enable
+```
+
+Players use `!admin` or `!admin message text` in Team or Unit chat. The bot pings
+the configured role with an `HLLVN SOS` embed containing the player's name, EOS
+ID, linked Discord account when available, and report text. Alerts are queued
+and delivered at most once every three seconds per server.
+
 For the dog-tag carving site, configure the shared IPC secret and staff review
 channel after deploying `tagweb`:
 

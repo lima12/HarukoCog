@@ -38,6 +38,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
 - `/hllvn allowvipteamswap toggle:<choice>` - Authorized member. Enable or disable the VIP-only in-game `!changeteam` command.
+- `/hllvn adminping role:@role toggle:<choice>` - Authorized member. Configure Discord staff alerts for the in-game `!admin` command.
 - `/hllvn seeding min_players:40 penalty_type:<choice> toggle:<choice>` - Authorized member. Configure automatic fourth-point protection during seeding.
 - `/hllvn hqprotection penalty_type:<choice> toggle:<choice>` - Authorized member. Protect each team's locked HQ sector from enemies.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
@@ -317,6 +318,33 @@ for processing. Requests repeated during that period are ignored without an
 RCON lookup or reply. The VIP list is cached for 30 seconds to limit `GetVips`
 traffic during a burst. Chat detection uses the existing shared three-second
 admin-log poll and does not call BattleMetrics or send Discord messages.
+
+## In-Game Admin Alerts
+
+Authorized members can enable the in-game admin request command from the text
+channel where alerts should be posted:
+
+```text
+/hllvn adminping role:@HLL-Admin toggle:Enable
+/hllvn adminping role:@HLL-Admin toggle:Disable
+```
+
+The enable command stores both the selected role and the channel where the
+slash command was run. It verifies the shared HLL RCON connection before
+enabling. The bot must be able to send messages and embeds in that channel;
+`@everyone` cannot be selected as the alert role. The configuration command is
+restricted to bot owners and members authorized through `[p]bm auth`.
+
+Players can then send either `!admin` or `!admin message text` in HLL Team or
+Unit chat. Discord receives an `HLLVN SOS` embed containing the player's in-game
+name, EOS ID, linked Discord account when available, and the supplied text. The
+configured role is the only mention Discord is allowed to notify; mentions
+placed in player names or report text cannot ping other users or roles.
+
+Alerts use the existing shared three-second RCON admin-log poll. Overlapping log
+results are deduplicated, and alerts enter a bounded queue that sends at most
+one message per guild every three seconds. Temporary Discord failures use an
+exponential retry delay. The feature makes no BattleMetrics API calls.
 
 ## HLL Database And Account Linking
 
