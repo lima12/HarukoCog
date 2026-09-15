@@ -42,7 +42,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.3.0"
+    __version__ = "1.4.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -77,6 +77,10 @@ class BattleMetric(
         self.kill_feed.register_log_consumer(
             self.hll_database.ingest_admin_logs,
             self.hll_database.should_poll,
+        )
+        self.kill_feed.register_log_consumer(
+            self.hll_vip.ingest_admin_logs,
+            self.hll_vip.should_poll,
         )
 
     async def cog_load(self) -> None:

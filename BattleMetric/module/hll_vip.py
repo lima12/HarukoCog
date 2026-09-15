@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Mapping
+import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -18,6 +19,16 @@ from .hll_group import HLLVN_COMMAND_GROUP
 from .kill_feed import KillFeedConnectionTestError
 
 log = logging.getLogger("red.BattleMetric.hll_vip")
+
+try:
+    from hllrcon.admin_logs import HLLVPlayerSendMessageAdminLog
+    from hllrcon.responses import ForceMode
+except Exception as exc:  # noqa: BLE001 - keep the rest of the cog loadable
+    HLLVPlayerSendMessageAdminLog = None
+    ForceMode = None
+    HLLRCON_MODEL_IMPORT_ERROR: Exception | None = exc
+else:
+    HLLRCON_MODEL_IMPORT_ERROR = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +108,9 @@ class HLLVIPModule:
     MIN_DURATION_SECONDS = 60
     MAX_DURATION_SECONDS = 365 * 24 * 60 * 60
     PURGE_REQUEST_INTERVAL_SECONDS = 2
+    TEAM_SWAP_COOLDOWN_SECONDS = 90
+    VIP_CACHE_SECONDS = 30
+    TEAM_SWAP_COMMAND = "!changeteam"
     EOS_PATTERN = re.compile(r"(?:\d{17}|[0-9a-fA-F]{32})")
     DURATION_PATTERN = re.compile(
         r"^\s*(\d+)\s*(m(?:in(?:ute)?)?s?|h(?:(?:our|r)s?)?|d(?:ay)?s?|w(?:eek)?s?)?\s*$",
@@ -136,16 +150,165 @@ class HLLVIPModule:
     def __init__(self, cog: Any):
         self.cog = cog
         self._guild_locks: dict[int, asyncio.Lock] = {}
+        self._team_swap_enabled: set[int] = set()
+        self._team_swap_cooldowns: dict[tuple[int, str], float] = {}
+        self._vip_cache: dict[int, tuple[float, frozenset[str]]] = {}
 
     def register_config(self) -> None:
-        self.cog.config.register_guild(hll_vip_grants=[])
+        self.cog.config.register_guild(
+            hll_vip_grants=[],
+            hll_vip_team_swap_enabled=False,
+        )
 
     async def start(self) -> None:
+        all_guilds = await self.cog.config.all_guilds()
+        self._team_swap_enabled = {
+            int(guild_id)
+            for guild_id, settings in all_guilds.items()
+            if isinstance(settings, Mapping)
+            and bool(settings.get("hll_vip_team_swap_enabled", False))
+        }
         if not self.expiry_worker.is_running():
             self.expiry_worker.start()
 
     def stop(self) -> None:
         self.expiry_worker.cancel()
+        self._team_swap_enabled.clear()
+        self._team_swap_cooldowns.clear()
+        self._vip_cache.clear()
+
+    def should_poll(self, guild_id: int) -> bool:
+        """Return whether the shared admin-log poller is needed for team swaps."""
+        return guild_id in self._team_swap_enabled
+
+    async def configure_team_swap(self, guild: discord.Guild, *, enabled: bool) -> None:
+        await self.cog.config.guild(guild).hll_vip_team_swap_enabled.set(enabled)
+        if enabled:
+            self._team_swap_enabled.add(guild.id)
+        else:
+            self._team_swap_enabled.discard(guild.id)
+        self._clear_team_swap_state(guild.id)
+
+    async def ingest_admin_logs(
+        self,
+        guild: discord.Guild,
+        entries: Sequence[Any],
+    ) -> None:
+        """Handle VIP team-switch requests from the shared RCON admin log."""
+        if not self.should_poll(guild.id) or HLLVPlayerSendMessageAdminLog is None:
+            return
+
+        now = time.monotonic()
+        self._purge_team_swap_cooldowns(now)
+        for entry in entries:
+            if not isinstance(entry, HLLVPlayerSendMessageAdminLog):
+                continue
+            if str(entry.message).strip().casefold() != self.TEAM_SWAP_COMMAND:
+                continue
+
+            player_id = str(entry.player_id).strip()
+            cooldown_key = (guild.id, player_id)
+            if self._team_swap_cooldowns.get(cooldown_key, 0) > now:
+                continue
+
+            # Reserve the cooldown before any I/O so repeated log entries stay silent.
+            self._team_swap_cooldowns[cooldown_key] = (
+                now + self.TEAM_SWAP_COOLDOWN_SECONDS
+            )
+            await self._handle_team_swap_request(guild, player_id)
+
+    async def _handle_team_swap_request(
+        self,
+        guild: discord.Guild,
+        player_id: str,
+    ) -> None:
+        normalized_id = self.normalize_eos_id(player_id)
+        if normalized_id is None:
+            log.warning(
+                "Ignored HLL VIP team-swap request with invalid player ID %r in guild %s",
+                player_id,
+                guild.id,
+            )
+            return
+
+        try:
+            vip_ids = await self._get_server_vip_ids(guild)
+            if normalized_id not in vip_ids:
+                await self.cog.kill_feed.execute_rcon(
+                    guild,
+                    "MessagePlayer non-VIP team-swap response",
+                    lambda client: client.message_player(
+                        player_id,
+                        "This feature is for VIPs only.",
+                    ),
+                )
+                return
+
+            if ForceMode is None:
+                raise RuntimeError(
+                    f"hllrcon models are unavailable: {HLLRCON_MODEL_IMPORT_ERROR}"
+                )
+            await self.cog.kill_feed.execute_rcon(
+                guild,
+                "ForceTeamSwitch request",
+                lambda client: client.force_team_switch(
+                    player_id,
+                    ForceMode.IMMEDIATE,
+                ),
+            )
+            log.info(
+                "Applied VIP team switch for player %s in guild %s",
+                player_id,
+                guild.id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - isolate player requests from the poller
+            log.warning(
+                "Could not process VIP team switch for player %s in guild %s: %s",
+                player_id,
+                guild.id,
+                exc,
+            )
+
+    async def _get_server_vip_ids(self, guild: discord.Guild) -> frozenset[str]:
+        now = time.monotonic()
+        cached = self._vip_cache.get(guild.id)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+
+        response = await self.cog.kill_feed.execute_rcon(
+            guild,
+            "GetVips request",
+            lambda client: client.get_vip_users(),
+        )
+        entries = getattr(response, "vips", None)
+        if not isinstance(entries, (list, tuple)):
+            raise ValueError(  # noqa: TRY004 - invalid remote response, not caller input
+                "HLL RCON returned an invalid VIP list."
+            )
+
+        vip_ids = frozenset(
+            eos_id
+            for entry in entries
+            if (eos_id := self.normalize_eos_id(str(getattr(entry, "id", ""))))
+            is not None
+        )
+        self._vip_cache[guild.id] = (now + self.VIP_CACHE_SECONDS, vip_ids)
+        return vip_ids
+
+    def _invalidate_vip_cache(self, guild_id: int) -> None:
+        self._vip_cache.pop(guild_id, None)
+
+    def _clear_team_swap_state(self, guild_id: int) -> None:
+        self._invalidate_vip_cache(guild_id)
+        for key in [key for key in self._team_swap_cooldowns if key[0] == guild_id]:
+            self._team_swap_cooldowns.pop(key, None)
+
+    def _purge_team_swap_cooldowns(self, now: float) -> None:
+        for key, expires_at in list(self._team_swap_cooldowns.items()):
+            if expires_at <= now:
+                self._team_swap_cooldowns.pop(key, None)
 
     async def add_vip(
         self,
@@ -188,6 +351,7 @@ class HLLVIPModule:
                 "AddVip request",
                 lambda client: client.add_vip(eos_id, description),
             )
+            self._invalidate_vip_cache(guild.id)
             grants = [stored for stored in grants if stored.eos_id != eos_id]
             grants.append(grant)
             await self._set_grants(guild, grants)
@@ -308,6 +472,7 @@ class HLLVIPModule:
                     )
                 else:
                     changed = True
+                    self._invalidate_vip_cache(guild.id)
                     log.info(
                         "Removed expired HLL VIP for guild %s and EOS %s",
                         guild.id,
@@ -378,6 +543,7 @@ class HLLVIPModule:
                         )
                     else:
                         removed.append(eos_id)
+                        self._invalidate_vip_cache(guild.id)
 
                     if index + 1 < len(candidates):
                         await asyncio.sleep(self.PURGE_REQUEST_INTERVAL_SECONDS)
@@ -446,6 +612,69 @@ class HLLVIPCommandsMixin:
     """Public purchase and restricted administration commands for HLL VIPs."""
 
     hllvn = HLLVN_COMMAND_GROUP
+
+    @hllvn.command(
+        name="allowvipteamswap",
+        description="Enable or disable the VIP-only in-game !changeteam command.",
+    )
+    @app_commands.describe(toggle="Enable or disable VIP team switching.")
+    @app_commands.choices(
+        toggle=[
+            app_commands.Choice(name="Enable", value="enable"),
+            app_commands.Choice(name="Disable", value="disable"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def hllvn_allowvipteamswap(
+        self,
+        interaction: discord.Interaction,
+        toggle: app_commands.Choice[str],
+    ) -> None:
+        if not await self.is_authorized(interaction.user):
+            await interaction.response.send_message(
+                "You are not authorized to use HLL: Vietnam administration commands.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        guild = interaction.guild
+        if guild is None:
+            await interaction.followup.send("This command can only be used in a server.")
+            return
+
+        enabled = toggle.value == "enable"
+        if enabled:
+            try:
+                await self.kill_feed.test_connection(guild)
+            except (ValueError, KillFeedConnectionTestError) as exc:
+                await interaction.followup.send(str(exc))
+                return
+            except RuntimeError:
+                log.exception("HLL VIP team switching is unavailable")
+                await interaction.followup.send(
+                    "The `hllrcon` dependency is unavailable. Ask the bot owner to "
+                    "update the cog dependencies and restart Red."
+                )
+                return
+
+        await self.hll_vip.configure_team_swap(guild, enabled=enabled)
+        embed = discord.Embed(
+            title="HLL VN VIP Team Swap",
+            description=(
+                "VIP players can now use `!changeteam` in Team or Unit chat. "
+                "The switch is immediate and kills a living soldier."
+                if enabled
+                else "The in-game `!changeteam` command is disabled."
+            ),
+            color=discord.Color.green() if enabled else discord.Color.orange(),
+            timestamp=discord.utils.utcnow(),
+        )
+        if enabled:
+            embed.set_footer(
+                text="Each player has a silent 90-second request cooldown."
+            )
+        await interaction.followup.send(embed=embed)
 
     @hllvn.command(name="addvip", description="Add a timed VIP through HLL RCON.")
     @app_commands.describe(

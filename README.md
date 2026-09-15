@@ -168,6 +168,17 @@ two seconds:
 /hllvn purgevip confirm:true
 ```
 
+Authorized members can also enable the VIP-only in-game team switch:
+
+```text
+/hllvn allowvipteamswap toggle:Enable
+```
+
+Players on the server then use `!changeteam` in Team or Unit chat. Current RCON
+VIPs switch immediately, which kills a living soldier; non-VIPs receive a
+private rejection. Repeated requests from the same player are silently ignored
+for 90 seconds.
+
 For the dog-tag carving site, configure the shared IPC secret and staff review
 channel after deploying `tagweb`:
 

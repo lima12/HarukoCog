@@ -2,11 +2,11 @@
   "author": ["Haruko"],
   "name": "BattleMetric",
   "short": "BattleMetrics, HLL RCON, stats, territory protection, VIP, and dog-tag review cog.",
-  "description": "Modular Redbot cog for BattleMetrics server data, HLL: Vietnam kill feeds, seeding and HQ protection, timed VIPs, PostgreSQL statistics, account linking, and custom dog-tag review.",
+  "description": "Modular Redbot cog for BattleMetrics server data, HLL: Vietnam kill feeds, seeding and HQ protection, timed VIPs and VIP team switching, PostgreSQL statistics, account linking, and custom dog-tag review.",
   "install_msg": "BattleMetric loaded. Use [p]help battlemetric, [p]help serverinfo, [p]help killfeed, [p]help dogtag, /link, /vnstat, or /hllvn.",
   "requirements": ["aiohttp", "asyncpg>=0.30,<0.32", "Pillow>=11,<13", "pydantic>=2.11.5,<2.12", "hllrcon>=2.0.0.4,<2.0.1"],
-  "tags": ["battlemetrics", "api", "games", "servers", "hll", "rcon", "seeding", "hq-protection", "vip", "dogtag", "postgresql"],
+  "tags": ["battlemetrics", "api", "games", "servers", "hll", "rcon", "seeding", "hq-protection", "vip", "team-swap", "dogtag", "postgresql"],
   "min_bot_version": "3.5.0",
   "min_python_version": [3, 11, 0],
-  "end_user_data_statement": "Reads BattleMetrics, HLL RCON, PostgreSQL, and tagweb IPC secrets from Red's shared API-token storage; stores settings, authorized Discord user IDs, seeding and HQ-protection settings, timed VIP records, and pending dog-tag review metadata; stores account links and HLL statistics in PostgreSQL; and stores staged or approved dog-tag PNGs in the configured host directory."
+  "end_user_data_statement": "Reads BattleMetrics, HLL RCON, PostgreSQL, and tagweb IPC secrets from Red's shared API-token storage; stores settings, authorized Discord user IDs, seeding and HQ-protection settings, the VIP team-swap toggle, timed VIP records, and pending dog-tag review metadata; stores account links and HLL statistics in PostgreSQL; and stores staged or approved dog-tag PNGs in the configured host directory."
 }

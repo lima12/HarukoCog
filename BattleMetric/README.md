@@ -37,6 +37,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn addvip eos_id:EOS_ID duration:1d` - Authorized member. Add a game account directly to the HLL VIP list for a limited duration.
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
+- `/hllvn allowvipteamswap toggle:<choice>` - Authorized member. Enable or disable the VIP-only in-game `!changeteam` command.
 - `/hllvn seeding min_players:40 penalty_type:<choice> toggle:<choice>` - Authorized member. Configure automatic fourth-point protection during seeding.
 - `/hllvn hqprotection penalty_type:<choice> toggle:<choice>` - Authorized member. Protect each team's locked HQ sector from enemies.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
@@ -295,6 +296,27 @@ tracked by `/hllvn addvip` or `/hllvn buyvip`. Each removal is serialized throug
 the same RCON connection lock and spaced two seconds apart; the command does not
 call BattleMetrics. Failed removals are reported once and are not retried in a
 tight loop.
+
+### VIP team switching
+
+Authorized members can enable the in-game VIP team-switch command:
+
+```text
+/hllvn allowvipteamswap toggle:Enable
+/hllvn allowvipteamswap toggle:Disable
+```
+
+When enabled, a player can enter `!changeteam` in Team or Unit chat. The cog
+checks the server's current RCON VIP list, so bot-managed and externally managed
+VIPs are both recognized. A VIP is switched immediately; HLL kills their current
+soldier when they are alive. A non-VIP receives the private in-game message
+`This feature is for VIPs only.`
+
+Each player enters a silent 90-second cooldown as soon as a request is accepted
+for processing. Requests repeated during that period are ignored without an
+RCON lookup or reply. The VIP list is cached for 30 seconds to limit `GetVips`
+traffic during a burst. Chat detection uses the existing shared three-second
+admin-log poll and does not call BattleMetrics or send Discord messages.
 
 ## HLL Database And Account Linking
 
