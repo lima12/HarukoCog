@@ -35,6 +35,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `[p]killfeed stop` - Authorized member. Disable the feed and discard queued events.
 - `/hllvn addvip member:@member duration:1d` - Authorized member. Add a linked Discord member to the HLL VIP list for a limited duration.
 - `/hllvn addvip eos_id:EOS_ID duration:1d` - Authorized member. Add a game account directly to the HLL VIP list for a limited duration.
+- `/hllvn giveseedvip duration:2d` - Authorized member. Reward players currently on the game server with timed VIP and a private in-game popup.
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
 - `/hllvn allowvipteamswap toggle:<choice>` - Authorized member. Enable or disable the VIP-only in-game `!changeteam` command.
@@ -271,6 +272,22 @@ expires, the cog sends `RemoveVip` over RCON. Failed removals remain stored and
 are retried, including after a cog or bot restart. Re-adding the same EOS ID
 replaces its bot-managed expiration with the new duration.
 
+Authorized members can reward everyone currently on the HLL: Vietnam server:
+
+```text
+/hllvn giveseedvip duration:2d
+```
+
+The command takes one RCON player snapshot, grants each player timed VIP access,
+and sends a private in-game popup thanking them for seeding. Existing bot-managed
+VIP time is extended rather than shortened, and these grants are protected from
+`/hllvn purgevip`. Players who already have an externally managed VIP receive
+the popup and temporary purge protection, but their original VIP is never
+removed by the bot because its expiry is unknown. The command spaces RCON
+requests two seconds apart and reports grant and popup failures separately.
+Players joining after the snapshot are not included. The Discord response is
+private to the authorized command user.
+
 `/hllvn buyvip` is available to every guild member. It first requires the
 member to have completed `/link`, then opens the private
 `HLLVN VIP EXCHANGE - NO REFUND!!!` modal. Enter one of these package numbers:
@@ -293,10 +310,10 @@ bot.
 `/hllvn purgevip` compares the server's current VIP list with all timed grants
 stored by the cog. The default `confirm:false` is a dry run. With `confirm:true`,
 it removes control-panel and other external VIPs while preserving every grant
-tracked by `/hllvn addvip` or `/hllvn buyvip`. Each removal is serialized through
-the same RCON connection lock and spaced two seconds apart; the command does not
-call BattleMetrics. Failed removals are reported once and are not retried in a
-tight loop.
+tracked by `/hllvn addvip`, `/hllvn buyvip`, or `/hllvn giveseedvip`. Each
+removal is serialized through the same RCON connection lock and spaced two
+seconds apart; the command does not call BattleMetrics. Failed removals are
+reported once and are not retried in a tight loop.
 
 ### VIP team switching
 

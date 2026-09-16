@@ -37,13 +37,15 @@ class HLLVIPGrant:
     expires_at: int
     granted_by: int | None
     discord_id: int | None
+    remove_on_expiry: bool = True
 
-    def to_config(self) -> dict[str, int | str | None]:
+    def to_config(self) -> dict[str, bool | int | str | None]:
         return {
             "eos_id": self.eos_id,
             "expires_at": self.expires_at,
             "granted_by": self.granted_by,
             "discord_id": self.discord_id,
+            "remove_on_expiry": self.remove_on_expiry,
         }
 
 
@@ -62,6 +64,16 @@ class HLLVIPPurgeResult:
     removed: tuple[str, ...]
     failed: tuple[str, ...]
     skipped_invalid: int
+
+
+@dataclass(frozen=True)
+class HLLSeedVIPResult:
+    online_players: int
+    rewarded: int
+    protected_external_vip: int
+    invalid_ids: int
+    failed: tuple[str, ...]
+    message_failed: tuple[str, ...]
 
 
 class HLLVIPPurchaseModal(discord.ui.Modal):
@@ -108,6 +120,7 @@ class HLLVIPModule:
     MIN_DURATION_SECONDS = 60
     MAX_DURATION_SECONDS = 365 * 24 * 60 * 60
     PURGE_REQUEST_INTERVAL_SECONDS = 2
+    SEED_REWARD_REQUEST_INTERVAL_SECONDS = 2
     TEAM_SWAP_COOLDOWN_SECONDS = 90
     VIP_CACHE_SECONDS = 30
     TEAM_SWAP_COMMAND = "!changeteam"
@@ -150,6 +163,7 @@ class HLLVIPModule:
     def __init__(self, cog: Any):
         self.cog = cog
         self._guild_locks: dict[int, asyncio.Lock] = {}
+        self._seed_reward_locks: dict[int, asyncio.Lock] = {}
         self._team_swap_enabled: set[int] = set()
         self._team_swap_cooldowns: dict[tuple[int, str], float] = {}
         self._vip_cache: dict[int, tuple[float, frozenset[str]]] = {}
@@ -320,6 +334,7 @@ class HLLVIPModule:
         granted_by: int,
         discord_id: int | None,
         extend_existing: bool = False,
+        preserve_external: bool = True,
     ) -> HLLVIPGrant:
         normalized_eos_id = self.normalize_eos_id(eos_id)
         if normalized_eos_id is None:
@@ -344,7 +359,16 @@ class HLLVIPModule:
                 eos_id=eos_id,
                 expires_at=starts_at + duration_seconds,
                 granted_by=granted_by,
-                discord_id=discord_id,
+                discord_id=(
+                    discord_id
+                    if discord_id is not None
+                    else current.discord_id if extend_existing and current is not None else None
+                ),
+                remove_on_expiry=(
+                    current.remove_on_expiry
+                    if preserve_external and current is not None
+                    else True
+                ),
             )
             await self.cog.kill_feed.execute_rcon(
                 guild,
@@ -357,6 +381,167 @@ class HLLVIPModule:
             await self._set_grants(guild, grants)
 
         return grant
+
+    async def give_seed_vip(
+        self,
+        guild: discord.Guild,
+        *,
+        duration_seconds: int,
+        granted_by: int,
+    ) -> HLLSeedVIPResult:
+        """Reward the player snapshot without replacing external VIP grants."""
+        if not self.MIN_DURATION_SECONDS <= duration_seconds <= self.MAX_DURATION_SECONDS:
+            raise ValueError("The VIP duration must be between 1 minute and 365 days.")
+
+        lock = self._seed_reward_locks.setdefault(guild.id, asyncio.Lock())
+        if lock.locked():
+            raise ValueError("A seeding VIP reward is already running for this server.")
+
+        async with lock:
+            async def snapshot(client: Any) -> tuple[Any, Any]:
+                players = await client.get_players()
+                vips = await client.get_vip_users()
+                return players, vips
+
+            players_response, vips_response = await self.cog.kill_feed.execute_rcon(
+                guild,
+                "GetPlayers and GetVips seeding snapshot",
+                snapshot,
+            )
+            players = getattr(players_response, "players", None)
+            vips = getattr(vips_response, "vips", None)
+            if not isinstance(players, (list, tuple)) or not isinstance(vips, (list, tuple)):
+                raise ValueError(  # noqa: TRY004 - invalid remote response, not caller input
+                    "HLL RCON returned an invalid player or VIP list."
+                )
+
+            server_vips = {
+                eos_id
+                for entry in vips
+                if (eos_id := self.normalize_eos_id(str(getattr(entry, "id", ""))))
+                is not None
+            }
+            managed_grants = {
+                grant.eos_id: grant for grant in await self._get_grants(guild)
+            }
+            targets: list[tuple[str, str, str, bool]] = []
+            seen_ids: set[str] = set()
+            invalid_ids = 0
+            for player in players:
+                player_id = str(getattr(player, "id", "")).strip()
+                eos_id = self.normalize_eos_id(str(getattr(player, "eos_id", "")))
+                if eos_id is None or self.normalize_eos_id(player_id) != eos_id:
+                    invalid_ids += 1
+                    continue
+                if eos_id in seen_ids:
+                    continue
+                seen_ids.add(eos_id)
+                current = managed_grants.get(eos_id)
+                is_external_vip = eos_id in server_vips and (
+                    current is None or not current.remove_on_expiry
+                )
+                targets.append(
+                    (
+                        eos_id,
+                        player_id,
+                        str(getattr(player, "name", "")),
+                        is_external_vip,
+                    )
+                )
+
+            rewarded = 0
+            protected_external_vip = 0
+            failed: list[str] = []
+            message_failed: list[str] = []
+            reward_text = self.format_duration(duration_seconds)
+            popup = f"Thank you for helping seed the server! Here is {reward_text} of VIP as a reward <3"
+            for index, (eos_id, player_id, name, is_external_vip) in enumerate(targets):
+                safe_name = re.sub(r"[\x00-\x1f\x7f]+", " ", name).strip()[:80]
+                try:
+                    if is_external_vip:
+                        await self._protect_external_vip(
+                            guild,
+                            eos_id=eos_id,
+                            duration_seconds=duration_seconds,
+                            granted_by=granted_by,
+                        )
+                    else:
+                        await self.add_vip(
+                            guild,
+                            eos_id=eos_id,
+                            description=f"{safe_name or eos_id} | Seeding reward",
+                            duration_seconds=duration_seconds,
+                            granted_by=granted_by,
+                            discord_id=None,
+                            extend_existing=True,
+                            preserve_external=False,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - continue independent players
+                    failed.append(eos_id)
+                    log.warning("Could not grant seeding VIP to %s in guild %s: %s", eos_id, guild.id, exc)
+                else:
+                    rewarded += 1
+                    if is_external_vip:
+                        protected_external_vip += 1
+                    await asyncio.sleep(self.SEED_REWARD_REQUEST_INTERVAL_SECONDS)
+                    try:
+                        await self.cog.kill_feed.execute_rcon(
+                            guild,
+                            "MessagePlayer seeding reward",
+                            lambda client, target=player_id: client.message_player(target, popup),
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - VIP grant remains valid
+                        message_failed.append(eos_id)
+                        log.warning(
+                            "Could not notify seeding VIP %s in guild %s: %s",
+                            eos_id,
+                            guild.id,
+                            exc,
+                        )
+                if index + 1 < len(targets):
+                    await asyncio.sleep(self.SEED_REWARD_REQUEST_INTERVAL_SECONDS)
+
+            return HLLSeedVIPResult(
+                online_players=len(players),
+                rewarded=rewarded,
+                protected_external_vip=protected_external_vip,
+                invalid_ids=invalid_ids,
+                failed=tuple(failed),
+                message_failed=tuple(message_failed),
+            )
+
+    async def _protect_external_vip(
+        self,
+        guild: discord.Guild,
+        *,
+        eos_id: str,
+        duration_seconds: int,
+        granted_by: int,
+    ) -> HLLVIPGrant:
+        """Temporarily protect an external VIP without taking over its removal."""
+        async with self._guild_lock(guild.id):
+            grants = await self._get_grants(guild)
+            current = next(
+                (grant for grant in grants if grant.eos_id == eos_id),
+                None,
+            )
+            now = int(discord.utils.utcnow().timestamp())
+            starts_at = max(now, current.expires_at) if current is not None else now
+            grant = HLLVIPGrant(
+                eos_id=eos_id,
+                expires_at=starts_at + duration_seconds,
+                granted_by=granted_by,
+                discord_id=current.discord_id if current is not None else None,
+                remove_on_expiry=False,
+            )
+            grants = [stored for stored in grants if stored.eos_id != eos_id]
+            grants.append(grant)
+            await self._set_grants(guild, grants)
+            return grant
 
     async def delete_user_data(self, user_id: int) -> None:
         for guild_id, guild_data in (await self.cog.config.all_guilds()).items():
@@ -379,6 +564,7 @@ class HLLVIPModule:
                         expires_at=grant.expires_at,
                         granted_by=granted_by,
                         discord_id=discord_id,
+                        remove_on_expiry=grant.remove_on_expiry,
                     )
                 )
             if changed:
@@ -453,6 +639,14 @@ class HLLVIPModule:
             for grant in grants:
                 if grant.expires_at > now:
                     retained.append(grant)
+                    continue
+                if not grant.remove_on_expiry:
+                    changed = True
+                    log.info(
+                        "Released expired purge protection for external HLL VIP %s in guild %s",
+                        grant.eos_id,
+                        guild.id,
+                    )
                     continue
                 try:
                     await self.cog.kill_feed.execute_rcon(
@@ -590,6 +784,7 @@ class HLLVIPModule:
                     expires_at=expires_at,
                     granted_by=cls._optional_id(raw.get("granted_by")),
                     discord_id=cls._optional_id(raw.get("discord_id")),
+                    remove_on_expiry=raw.get("remove_on_expiry", True) is not False,
                 )
             )
         return grants
@@ -612,6 +807,103 @@ class HLLVIPCommandsMixin:
     """Public purchase and restricted administration commands for HLL VIPs."""
 
     hllvn = HLLVN_COMMAND_GROUP
+
+    @hllvn.command(
+        name="giveseedvip",
+        description="Reward all current players with timed, bot-managed seeding VIP.",
+    )
+    @app_commands.describe(duration="Reward length, such as 2d, 12h, or 1w.")
+    @app_commands.guild_only()
+    async def hllvn_giveseedvip(
+        self,
+        interaction: discord.Interaction,
+        duration: str,
+    ) -> None:
+        if not await self.is_authorized(interaction.user):
+            await interaction.response.send_message(
+                "You are not authorized to use HLL: Vietnam administration commands.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        guild = interaction.guild
+        if guild is None:
+            await interaction.followup.send("This command can only be used in a server.")
+            return
+
+        duration_seconds = self.hll_vip.parse_duration(duration)
+        if duration_seconds is None:
+            await interaction.followup.send(
+                "Use a duration from 1 minute through 365 days, such as `12h`, `2d`, or `1w`."
+            )
+            return
+
+        try:
+            result = await self.hll_vip.give_seed_vip(
+                guild,
+                duration_seconds=duration_seconds,
+                granted_by=interaction.user.id,
+            )
+        except (ValueError, KillFeedConnectionTestError) as exc:
+            await interaction.followup.send(str(exc))
+            return
+        except RuntimeError:
+            log.exception("HLL seeding VIP rewards are unavailable")
+            await interaction.followup.send(
+                "The `hllrcon` dependency is unavailable. Ask the bot owner to "
+                "update the cog dependencies and restart Red."
+            )
+            return
+        except Exception:
+            log.exception("Unexpected seeding VIP reward failure for guild %s", guild.id)
+            await interaction.followup.send(
+                "The seeding VIP reward failed. Ask the bot owner to check the Red service log."
+            )
+            return
+
+        embed = discord.Embed(
+            title="HLL VN Seeding VIP Reward",
+            color=(discord.Color.orange() if result.failed else discord.Color.green()),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Online at Snapshot", value=str(result.online_players), inline=True)
+        embed.add_field(name="VIP Rewarded", value=str(result.rewarded), inline=True)
+        embed.add_field(
+            name="Duration Added",
+            value=self.hll_vip.format_duration(duration_seconds),
+            inline=True,
+        )
+        embed.add_field(
+            name="External VIPs Protected",
+            value=str(result.protected_external_vip),
+            inline=True,
+        )
+        embed.add_field(name="Grant Failures", value=str(len(result.failed)), inline=True)
+        embed.add_field(
+            name="Popup Failures",
+            value=str(len(result.message_failed)),
+            inline=True,
+        )
+        if result.invalid_ids:
+            embed.add_field(
+                name="Invalid Player IDs Skipped",
+                value=str(result.invalid_ids),
+                inline=False,
+            )
+        if result.failed:
+            embed.add_field(
+                name="Failed EOS IDs",
+                value=self._format_purge_ids(result.failed),
+                inline=False,
+            )
+        embed.set_footer(
+            text="Rewards are protected from purgevip; external VIP access stays unchanged."
+        )
+        await interaction.followup.send(
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @hllvn.command(
         name="allowvipteamswap",

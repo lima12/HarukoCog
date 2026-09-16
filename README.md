@@ -147,6 +147,18 @@ EOS ID. The duration defaults to one day:
 The cog persists the expiration and removes the VIP through the configured
 RCON connection, retrying later if the server is unavailable.
 
+Authorized members can reward everyone currently on the game server with timed
+VIP and a private in-game thank-you popup:
+
+```text
+/hllvn giveseedvip duration:2d
+```
+
+The command extends existing bot-managed VIP time. External VIPs receive the
+popup and temporary purge protection without changing their original VIP.
+RCON requests are spaced two seconds apart, so a full server can take several
+minutes.
+
 All linked members can also exchange their confirmed kills through the private
 VIP purchase modal:
 
@@ -159,9 +171,9 @@ database deduction is atomic and only commits after the RCON VIP grant is
 accepted.
 
 Authorized members can preview or purge server VIPs that are not tracked by the
-cog. VIPs created by either `/hllvn addvip` or `/hllvn buyvip` remain protected,
-and removals are sent through the shared RCON connection at one request every
-two seconds:
+cog. VIPs created by `/hllvn addvip`, `/hllvn buyvip`, or
+`/hllvn giveseedvip` remain protected, and removals are sent through the shared
+RCON connection at one request every two seconds:
 
 ```text
 /hllvn purgevip confirm:false
