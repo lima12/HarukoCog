@@ -1,10 +1,8 @@
 from .haruadmins import HaruAdmins
 
-
 async def setup(bot):
     """HaruAdmins entry point."""
     await bot.add_cog(HaruAdmins(bot))
-
 
 __red_end_user_data_statement__ = (
     "This cog stores the Discord user ID, moderator ID, timeout expiration, and "
