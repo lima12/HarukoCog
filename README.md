@@ -1,6 +1,7 @@
 # HarukoCog
 
-Redbot cog repository containing BattleMetric and VoiceChannelHandling.
+Redbot cog repository containing BattleMetric, HaruAdmins, and
+VoiceChannelHandling.
 
 Replace `[p]` in every command below with your bot's command prefix. Repository
 and cog installation commands must be run by a bot owner.
@@ -19,7 +20,7 @@ Add this repository once:
 [p]repo add HarukoCog https://github.com/lima12/HarukoCog.git main
 ```
 
-Install and load either cog:
+Install and load any cog:
 
 ```text
 [p]cog install HarukoCog BattleMetric
@@ -31,11 +32,17 @@ Install and load either cog:
 [p]load VoiceChannelHandling
 ```
 
-To install both at once:
+```text
+[p]cog install HarukoCog HaruAdmins
+[p]load HaruAdmins
+```
+
+To install all three at once:
 
 ```text
-[p]cog install HarukoCog BattleMetric VoiceChannelHandling
+[p]cog install HarukoCog BattleMetric HaruAdmins VoiceChannelHandling
 [p]load BattleMetric
+[p]load HaruAdmins
 [p]load VoiceChannelHandling
 ```
 
@@ -218,6 +225,19 @@ Discord OAuth2, systemd, and Nginx configuration.
 See [BattleMetric/README.md](BattleMetric/README.md) for all commands and
 authorization details.
 
+## HaruAdmins
+
+HaruAdmins adds a hybrid timeout command for moderators. Durations longer than
+Discord's 28-day maximum are saved and renewed automatically in 28-day
+segments, including after a bot restart:
+
+```text
+/timeout member:@member duration:30d reason:Repeated rule violations
+```
+
+See [HaruAdmins/README.md](HaruAdmins/README.md) for duration formats,
+permissions, and renewal behavior.
+
 ## VoiceChannelHandling
 
 VoiceChannelHandling creates a temporary voice room when a member joins a
@@ -251,7 +271,7 @@ folder that contains the cog packages, then load the cog:
 ```
 
 Replace the path with the location of your local `HarukoCog` folder. Load
-`VoiceChannelHandling` instead when testing that cog.
+`HaruAdmins` or `VoiceChannelHandling` instead when testing those cogs.
 
 ## Updating
 
