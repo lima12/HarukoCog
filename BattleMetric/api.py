@@ -190,6 +190,15 @@ class BattleMetricsClient:
             params["filter"] = {"search": search}
         return await self.get("/players", params=params, auth=auth)
 
+    async def create_ban(self, document: Mapping[str, Any]) -> Dict[str, Any]:
+        """Create a BattleMetrics ban from a JSON:API document."""
+        return await self.request(
+            "POST",
+            "/bans",
+            json=document,
+            auth=True,
+        )
+
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=self._timeout)

@@ -13,5 +13,7 @@ __red_end_user_data_statement__ = (
     "seeding and HQ-protection settings, "
     "dog-tag review settings, and authorized Discord user IDs. It stores verified "
     "Discord-to-EOS links and aggregated HLL statistics in PostgreSQL, plus staged "
-    "or approved dog-tag overlays in the configured host directory."
+    "or approved dog-tag overlays in the configured host directory. Ban commands send "
+    "the game ID, reason, duration, and acting Discord administrator ID and name to "
+    "BattleMetrics and the configured HLL server."
 )

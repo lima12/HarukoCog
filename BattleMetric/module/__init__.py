@@ -2,6 +2,7 @@
 
 from .admin_ping import HLLAdminPingCommandsMixin, HLLAdminPingModule
 from .dog_tags import DogTagCommandsMixin, DogTagModule
+from .hll_ban import HLLBanCommandsMixin, HLLBanModule
 from .hll_database import HLLDatabaseCommandsMixin, HLLDatabaseModule
 from .hll_vip import HLLVIPCommandsMixin, HLLVIPModule
 from .kill_feed import KillFeedCommandsMixin, KillFeedModule
@@ -14,6 +15,8 @@ __all__ = (
     "DogTagModule",
     "HLLAdminPingCommandsMixin",
     "HLLAdminPingModule",
+    "HLLBanCommandsMixin",
+    "HLLBanModule",
     "HLLDatabaseCommandsMixin",
     "HLLDatabaseModule",
     "HLLSeedingCommandsMixin",

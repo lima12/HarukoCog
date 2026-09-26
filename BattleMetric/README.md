@@ -35,6 +35,8 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `[p]killfeed stop` - Authorized member. Disable the feed and discard queued events.
 - `/hllvn addvip member:@member duration:1d` - Authorized member. Add a linked Discord member to the HLL VIP list for a limited duration.
 - `/hllvn addvip eos_id:EOS_ID duration:1d` - Authorized member. Add a game account directly to the HLL VIP list for a limited duration.
+- `/hllvn ban member:@member duration:2d reason:REASON` - Authorized member. Ban a linked member through BattleMetrics and in-game RCON.
+- `/hllvn ban eos_id:EOS_ID reason:REASON` - Authorized member. Permanently ban a game account through both systems.
 - `/hllvn giveseedvip duration:2d` - Authorized member. Reward players currently on the game server with timed VIP and a private in-game popup.
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
@@ -244,6 +246,41 @@ player. Immediate punishment skips the warning period. The shared player list
 is requested every three seconds only while seeding or HQ protection is active;
 the command sends no periodic Discord messages and makes no BattleMetrics API
 calls.
+
+## Linked BattleMetrics and HLL Bans
+
+`/hllvn ban` is restricted to members authorized through `[p]bm auth add` and
+bot owners. It supports either a verified Discord link or a direct game ID:
+
+```text
+/hllvn ban member:@member duration:2d reason:Repeated team killing
+/hllvn ban eos_id:0123456789abcdef0123456789abcdef reason:Cheating
+```
+
+Choose exactly one of `member` and `eos_id`. The member form resolves the EOS ID
+from PostgreSQL; the direct form accepts a 17-digit or 32-character ID. Discord
+slash commands require separate fields here because one option cannot be both a
+native member picker and a free-text game-ID field.
+
+Duration is optional and defaults to permanent. Temporary bans accept whole
+hours, days, or weeks such as `6h`, `2d`, and `1w`; a unitless number means
+days. The limit is 365 days because the HLL RCON ban operation accepts duration
+in whole hours. A reason is required and is limited to 255 characters to fit
+the BattleMetrics ban record.
+
+The BattleMetrics record targets the Server Info panel's configured server,
+falling back to `[p]bm setserver`. It stores the game identifier with its
+BattleMetrics Steam, EOS, or HLL Windows identifier type, links the
+BattleMetrics player profile when quick-match finds one, and records the
+Discord administrator in the private ban note. The API token therefore needs
+permission to create bans for that server. The in-game side reuses the shared,
+serialized HLL RCON connection rather than opening a competing client. Both
+backends must be configured before the command creates either ban.
+
+BattleMetrics and RCON are attempted independently. This is intentional: a
+temporary outage on one service must not silently undo a successful moderation
+action on the other. The private result embed identifies complete, partial, or
+total failure and includes the BattleMetrics ban ID when one was created.
 
 ## Timed HLL VIPs
 

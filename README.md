@@ -154,6 +154,21 @@ EOS ID. The duration defaults to one day:
 The cog persists the expiration and removes the VIP through the configured
 RCON connection, retrying later if the server is unavailable.
 
+Authorized members can also apply one moderation ban to both BattleMetrics and
+the HLL: Vietnam server:
+
+```text
+/hllvn ban member:@member duration:2d reason:REASON
+/hllvn ban eos_id:EOS_ID reason:REASON
+```
+
+The member form resolves the verified Discord/EOS link. The direct form accepts
+a 17-digit or 32-character game account ID. Omitting `duration` creates a
+permanent ban; temporary bans accept whole hours, days, or weeks from one hour
+through 365 days. BattleMetrics and RCON are attempted independently, and the
+private result identifies partial success so an administrator can repair only
+the failed backend without silently undoing the successful ban.
+
 Authorized members can reward everyone currently on the game server with timed
 VIP and a private in-game thank-you popup:
 
