@@ -51,10 +51,11 @@ Use `[p]cog list HarukoCog` to see the cogs available from this repository.
 ## BattleMetric
 
 BattleMetric reads server data from the BattleMetrics API, maintains a Server
-Info embed, publishes a pooled HLL: Vietnam kill feed over direct RCON, and can
-store verified Discord/EOS links and batched player statistics in PostgreSQL.
-It also reviews custom dog-tag carvings from the sibling `tagweb` service and
-composites approved tags onto `/vnstat` cards.
+Info embed, publishes a pooled HLL: Vietnam kill feed over direct RCON, monitors
+team-kill thresholds for staff action, and can store verified Discord/EOS links
+and batched player statistics in PostgreSQL. It also reviews custom dog-tag
+carvings from the sibling `tagweb` service and composites approved tags onto
+`/vnstat` cards.
 
 After loading, configure the API token as the bot owner in a private channel or
 DM:
@@ -224,6 +225,20 @@ Players use `!admin` or `!admin message text` in Team or Unit chat. The bot ping
 the configured role with an `HLLVN SOS` embed containing the player's name, EOS
 ID, linked Discord account when available, and report text. Alerts are queued
 and delivered at most once every three seconds per server.
+
+Authorized members can also configure rolling team-kill alerts with staff action
+buttons:
+
+```text
+/hllvn tkwatch toggle:Enable channel:#admin-alerts threshold_per_min:3 watch_duration:15 exclude_commander:true
+```
+
+Reaching the threshold within one rolling minute posts a 15-minute action card.
+Staff can warn the player, warn and watch them for the configured 1-90 minutes,
+or kick them immediately. A watched player's next team kill triggers an
+automatic kick. Commander exclusion uses the live in-game role; when disabled,
+Commander alerts are explicitly labeled. The configuration command and every
+button are limited to users authorized through `[p]bm auth` and bot owners.
 
 For the dog-tag carving site, configure the shared IPC secret and staff review
 channel after deploying `tagweb`:

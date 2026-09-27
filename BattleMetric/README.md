@@ -42,6 +42,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
 - `/hllvn allowvipteamswap toggle:<choice>` - Authorized member. Enable or disable the VIP-only in-game `!changeteam` command.
 - `/hllvn adminping role:@role toggle:<choice>` - Authorized member. Configure Discord staff alerts for the in-game `!admin` command.
+- `/hllvn tkwatch toggle:<choice> channel:#channel threshold_per_min:3 watch_duration:15 exclude_commander:true` - Authorized member. Configure rolling team-kill threshold alerts and staff actions.
 - `/hllvn seeding min_players:40 penalty_type:<choice> toggle:<choice>` - Authorized member. Configure automatic fourth-point protection during seeding.
 - `/hllvn hqprotection penalty_type:<choice> toggle:<choice>` - Authorized member. Protect each team's locked HQ sector from enemies.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
@@ -399,6 +400,50 @@ Alerts use the existing shared three-second RCON admin-log poll. Overlapping log
 results are deduplicated, and alerts enter a bounded queue that sends at most
 one message per guild every three seconds. Temporary Discord failures use an
 exponential retry delay. The feature makes no BattleMetrics API calls.
+
+## Team-Kill Watch
+
+Authorized members can configure rolling team-kill detection and choose the
+Discord channel where staff action cards are sent:
+
+```text
+/hllvn tkwatch toggle:Enable channel:#admin-alerts threshold_per_min:3 watch_duration:15 exclude_commander:true
+/hllvn tkwatch toggle:Disable
+```
+
+The enable command requires a threshold from 1 through 100 team kills and a
+watch duration from 1 through 90 minutes. A player's count is measured over a
+rolling 60-second window and an alert is created when the configured threshold
+is reached. Configuration and every alert button are restricted to bot owners
+and members authorized through `[p]bm auth add`; checks happen before any defer,
+configuration read, database access, or RCON action.
+
+Each alert contains the player's name, EOS ID, team, current in-game role,
+threshold count, latest victim, and weapon. The staff controls are:
+
+- **Warn** sends `your Team Kill have been noticed by admin. Please avoid TK by all cost` through RCON.
+- **Warn & Watch** sends the warning and persists a watch for the configured duration. The player's next team kill while watched triggers an automatic kick.
+- **Kick** immediately removes the player from the game server through RCON.
+
+Alert buttons and their Discord message are valid for 15 minutes. The message
+is deleted when that window ends, even after a cog reload. Once staff acts, the
+buttons are disabled and the action is recorded on the embed until deletion.
+Pending alerts and active watches are cleared immediately when the feature is
+disabled.
+
+When `exclude_commander` is true, a current Commander is ignored. The role is
+verified from live RCON player data when a threshold or watched-player decision
+is required. If RCON cannot verify the role, the fail-safe behavior is to skip
+the alert or automatic kick. When commander exclusion is false, Commanders are
+included and the embed explicitly identifies the Commander role.
+
+Team-kill watch consumes the existing shared admin-log poll; it does not create
+another RCON client. Overlapping logs are deduplicated and queued in a bounded
+in-memory buffer so Discord delivery and role checks cannot delay the log poll.
+All player messages, role lookups, and kicks use the shared per-guild serialized
+RCON command path. Active Warn & Watch records and 15-minute action routing are
+stored in Red Config so they continue across reloads, while rolling counters and
+deduplication caches are intentionally runtime-only.
 
 ## HLL Database And Account Linking
 
