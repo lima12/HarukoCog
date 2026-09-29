@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from typing import Any, Dict, Mapping, Optional
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import aiohttp
 
@@ -198,6 +198,26 @@ class BattleMetricsClient:
             json=document,
             auth=True,
         )
+
+    async def list_bans(
+        self,
+        *,
+        search: Optional[str] = None,
+        page_size: int = 100,
+    ) -> Dict[str, Any]:
+        """List accessible bans, optionally narrowed by BattleMetrics search."""
+        page_size = max(1, min(int(page_size), 100))
+        params: Dict[str, Any] = {"page": {"size": page_size}}
+        if search:
+            params["filter"] = {"search": search}
+        return await self.get("/bans", params=params, auth=True)
+
+    async def delete_ban(self, ban_id: str) -> Dict[str, Any]:
+        """Delete one BattleMetrics ban by resource ID."""
+        safe_ban_id = quote(str(ban_id).strip(), safe="")
+        if not safe_ban_id:
+            raise ValueError("A BattleMetrics ban ID is required.")
+        return await self.request("DELETE", f"/bans/{safe_ban_id}", auth=True)
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:

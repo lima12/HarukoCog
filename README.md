@@ -170,6 +170,32 @@ through 365 days. BattleMetrics and RCON are attempted independently, and the
 private result identifies partial success so an administrator can repair only
 the failed backend without silently undoing the successful ban.
 
+The same authorized staff can remove the configured server's ban from both
+backends by linked member or direct game account ID:
+
+```text
+/hllvn unban member:@member
+/hllvn unban eos_id:EOS_ID
+```
+
+BattleMetrics removal is limited to exact identifier matches directly scoped to
+the configured server, so shared organization or ban-list records are left
+untouched. RCON clears either a temporary or permanent in-game ban. Each backend
+is reported independently.
+
+Authorized staff can also send an in-game popup to a linked mention, direct game
+account ID, or every connected player:
+
+```text
+/hllvn mesg target:@member mesgs:MESSAGE
+/hllvn mesg target:EOS_ID mesgs:MESSAGE
+/hllvn mesg target:ALL mesgs:MESSAGE
+```
+
+The `target` option is text so it can accept all three forms. Linked mentions
+must be members of the Discord server with a verified `/link`. These operations
+reuse the shared serialized HLL RCON client.
+
 Authorized members can reward everyone currently on the game server with timed
 VIP and a private in-game thank-you popup:
 

@@ -37,6 +37,11 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn addvip eos_id:EOS_ID duration:1d` - Authorized member. Add a game account directly to the HLL VIP list for a limited duration.
 - `/hllvn ban member:@member duration:2d reason:REASON` - Authorized member. Ban a linked member through BattleMetrics and in-game RCON.
 - `/hllvn ban eos_id:EOS_ID reason:REASON` - Authorized member. Permanently ban a game account through both systems.
+- `/hllvn unban member:@member` - Authorized member. Remove a linked member's server ban from BattleMetrics and in-game RCON.
+- `/hllvn unban eos_id:EOS_ID` - Authorized member. Remove a game account's server ban from both systems.
+- `/hllvn mesg target:@member mesgs:MESSAGE` - Authorized member. Send a private in-game popup to a linked member.
+- `/hllvn mesg target:EOS_ID mesgs:MESSAGE` - Authorized member. Send a private in-game popup directly by game account ID.
+- `/hllvn mesg target:ALL mesgs:MESSAGE` - Authorized member. Send an in-game popup to every connected player.
 - `/hllvn giveseedvip duration:2d` - Authorized member. Reward players currently on the game server with timed VIP and a private in-game popup.
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
@@ -250,12 +255,15 @@ calls.
 
 ## Linked BattleMetrics and HLL Bans
 
-`/hllvn ban` is restricted to members authorized through `[p]bm auth add` and
-bot owners. It supports either a verified Discord link or a direct game ID:
+`/hllvn ban` and `/hllvn unban` are restricted to members authorized through
+`[p]bm auth add` and bot owners. They support either a verified Discord link or
+a direct game ID:
 
 ```text
 /hllvn ban member:@member duration:2d reason:Repeated team killing
 /hllvn ban eos_id:0123456789abcdef0123456789abcdef reason:Cheating
+/hllvn unban member:@member
+/hllvn unban eos_id:0123456789abcdef0123456789abcdef
 ```
 
 Choose exactly one of `member` and `eos_id`. The member form resolves the EOS ID
@@ -274,14 +282,41 @@ falling back to `[p]bm setserver`. It stores the game identifier with its
 BattleMetrics Steam, EOS, or HLL Windows identifier type, links the
 BattleMetrics player profile when quick-match finds one, and records the
 Discord administrator in the private ban note. The API token therefore needs
-permission to create bans for that server. The in-game side reuses the shared,
-serialized HLL RCON connection rather than opening a competing client. Both
-backends must be configured before the command creates either ban.
+permission to create and delete bans for that server. The in-game side reuses
+the shared, serialized HLL RCON connection rather than opening a competing
+client. Both backends must be configured before either command changes a ban.
 
-BattleMetrics and RCON are attempted independently. This is intentional: a
-temporary outage on one service must not silently undo a successful moderation
-action on the other. The private result embed identifies complete, partial, or
-total failure and includes the BattleMetrics ban ID when one was created.
+BattleMetrics and RCON are attempted independently for both operations. This is
+intentional: a temporary outage on one service must not silently undo a
+successful moderation action on the other. The private result embed identifies
+complete, partial, or total failure and includes affected BattleMetrics ban IDs.
+
+Unban searches BattleMetrics with the exact game identifier, verifies each
+result locally, and only deletes bans directly scoped to the configured server.
+It does not delete organization-wide or ban-list records. The RCON side clears
+both temporary and permanent bans. A completed command may report that no ban
+was found on one backend; this is treated as an already-clear, idempotent result.
+
+## Authorized HLL Messages
+
+`/hllvn mesg` is restricted to the same `[p]bm auth add` authorization list and
+bot owners. Its single `target` text field accepts a linked Discord mention, a
+17-digit or 32-character game account ID, or the case-insensitive word `ALL`:
+
+```text
+/hllvn mesg target:@member mesgs:Please contact an admin.
+/hllvn mesg target:0123456789abcdef0123456789abcdef mesgs:Please contact an admin.
+/hllvn mesg target:ALL mesgs:The server will restart in 10 minutes.
+```
+
+Discord exposes `target` as text because the same slash-command option must also
+accept direct game IDs and `ALL`; type or paste the member mention into that
+field. Member targets must belong to this Discord server and have a verified
+`/link`. Direct and linked targets receive a private top-right in-game popup;
+`ALL` uses the corresponding all-player popup. Messages are normalized to one
+line and limited to 1,000 characters. The command uses the kill feed module's
+shared, serialized RCON client and does not require the Discord kill-feed output
+to be enabled.
 
 ## Timed HLL VIPs
 
