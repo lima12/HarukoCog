@@ -101,19 +101,21 @@ Vietnam server's RCON endpoint and feed channel:
 The RCON port may differ from the public game/query port. Kill events are
 queued and pooled into at most one Discord embed every three seconds.
 
-Authorized members can enable fourth-point protection for seeding. Choose
-whether offenders receive a five-second warning before they are killed or are
-punished immediately:
+Authorized members can enable two-stage seeding protection for Warfare and
+Offensive. Choose whether offenders receive a five-second warning before they
+are killed or are punished immediately:
 
 ```text
-/hllvn seeding min_players:40 penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
+/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
 ```
 
 The rule checks player count and match status every 60 seconds, then polls
 positions every three seconds only while protection is active. It enforces only
-on Warfare while population is at or below the threshold, automatically
-suspends above it, and resumes if population later drops. Use the same command
-with the `Disable` choice to turn the feature off completely.
+on Warfare and Offensive. On Warfare, the fourth and fifth sectors are locked
+before Stage 1, only the fifth remains locked after Stage 1, and Stage 2 fully
+unlocks the map. On Offensive, attackers can reach the second objective before
+Stage 1, the third after Stage 1, and all objectives after Stage 2. Defenders
+are not restricted. Use the same command with `Disable` to turn the feature off.
 
 Authorized members can also protect both teams' locked HQ sectors from enemy
 spawn killing:

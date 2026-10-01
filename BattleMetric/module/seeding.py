@@ -1,4 +1,4 @@
-"""Automatic HLL: Vietnam fourth-point and HQ territory protection."""
+"""Automatic HLL: Vietnam staged-seeding and HQ territory protection."""
 
 from __future__ import annotations
 
@@ -19,9 +19,10 @@ from .kill_feed import KillFeedConnectionTestError
 from .seeding_rules import (
     SeedingOffender,
     SeedingRuleError,
-    find_fourth_point_offenders,
     find_hq_offenders,
+    find_seeding_offenders,
     get_game_mode_id,
+    get_seeding_stage,
 )
 
 log = logging.getLogger("red.BattleMetric.seeding")
@@ -30,13 +31,15 @@ log = logging.getLogger("red.BattleMetric.seeding")
 @dataclass(frozen=True)
 class HLLSeedingSettings:
     enabled: bool
-    min_players: int
+    stage_one_players: int
+    stage_two_players: int
     penalty_type: str
 
     def to_config(self) -> dict[str, bool | int | str]:
         return {
             "enabled": self.enabled,
-            "min_players": self.min_players,
+            "stage_one_players": self.stage_one_players,
+            "stage_two_players": self.stage_two_players,
             "penalty_type": self.penalty_type,
         }
 
@@ -71,24 +74,26 @@ class _ViolationState:
 
 
 class HLLSeedingModule:
-    """Poll player positions and enforce the configured fourth-point rule."""
+    """Poll player positions and enforce configured staged-seeding rules."""
 
     PENALTY_WARNING = "warning_to_punish"
     PENALTY_PUNISH = "punish"
     VALID_PENALTIES = frozenset({PENALTY_WARNING, PENALTY_PUNISH})
 
-    DEFAULT_MIN_PLAYERS = 40
+    DEFAULT_STAGE_ONE_PLAYERS = 40
+    DEFAULT_STAGE_TWO_PLAYERS = 75
     STATUS_SCAN_INTERVAL_SECONDS = 60
     POSITION_SCAN_INTERVAL_SECONDS = 3
     WORKER_INTERVAL_SECONDS = 1
     WARNING_INTERVAL_SECONDS = 1
-    WARNING_GRACE_SECONDS = 15
+    WARNING_GRACE_SECONDS = 5
     MAX_ACTIONS_PER_TICK = 20
     MAX_RETRY_SECONDS = 60
 
     _EMPTY_SETTINGS: ClassVar[dict[str, bool | int | str]] = {
         "enabled": False,
-        "min_players": DEFAULT_MIN_PLAYERS,
+        "stage_one_players": DEFAULT_STAGE_ONE_PLAYERS,
+        "stage_two_players": DEFAULT_STAGE_TWO_PLAYERS,
         "penalty_type": PENALTY_WARNING,
     }
     _EMPTY_HQ_SETTINGS: ClassVar[dict[str, bool | str]] = {
@@ -101,6 +106,7 @@ class HLLSeedingModule:
         self._violations: dict[int, dict[str, _ViolationState]] = {}
         self._hq_violations: dict[int, dict[str, _ViolationState]] = {}
         self._sessions: dict[int, Any] = {}
+        self._seeding_stages: dict[int, int] = {}
         self._active_guilds: set[int] = set()
         self._hq_active_guilds: set[int] = set()
         self._next_status_scan_at: dict[int, float] = {}
@@ -122,6 +128,7 @@ class HLLSeedingModule:
         self._violations.clear()
         self._hq_violations.clear()
         self._sessions.clear()
+        self._seeding_stages.clear()
         self._active_guilds.clear()
         self._hq_active_guilds.clear()
         self._next_status_scan_at.clear()
@@ -132,18 +139,29 @@ class HLLSeedingModule:
         raw = await self.cog.config.guild(guild).hll_seeding()
         if not isinstance(raw, Mapping):
             raw = self._EMPTY_SETTINGS
-        min_players = self._bounded_int(
-            raw.get("min_players"),
-            default=self.DEFAULT_MIN_PLAYERS,
+        # Existing installations used min_players. Treat it as Stage 1 until
+        # the command is next saved, preserving the configured population.
+        stage_one_players = self._bounded_int(
+            raw.get("min_players", raw.get("stage_one_players")),
+            default=self.DEFAULT_STAGE_ONE_PLAYERS,
             minimum=1,
+            maximum=99,
+        )
+        stage_two_players = self._bounded_int(
+            raw.get("stage_two_players"),
+            default=max(self.DEFAULT_STAGE_TWO_PLAYERS, stage_one_players + 1),
+            minimum=2,
             maximum=100,
         )
+        if stage_two_players <= stage_one_players:
+            stage_two_players = min(100, stage_one_players + 1)
         penalty_type = str(raw.get("penalty_type", self.PENALTY_WARNING))
         if penalty_type not in self.VALID_PENALTIES:
             penalty_type = self.PENALTY_WARNING
         return HLLSeedingSettings(
             enabled=bool(raw.get("enabled", False)),
-            min_players=min_players,
+            stage_one_players=stage_one_players,
+            stage_two_players=stage_two_players,
             penalty_type=penalty_type,
         )
 
@@ -164,14 +182,22 @@ class HLLSeedingModule:
         guild: discord.Guild,
         *,
         enabled: bool,
-        min_players: int,
+        stage_one_players: int,
+        stage_two_players: int,
         penalty_type: str,
     ) -> HLLSeedingSettings:
-        if not 1 <= min_players <= 100:
-            raise ValueError("Minimum players must be between 1 and 100.")
+        if not 1 <= stage_one_players < stage_two_players <= 100:
+            raise ValueError(
+                "Stage 1 must be lower than Stage 2, and both must be between 1 and 100."
+            )
         if penalty_type not in self.VALID_PENALTIES:
             raise ValueError("Choose warning-to-punish or immediate punishment.")
-        settings = HLLSeedingSettings(enabled, min_players, penalty_type)
+        settings = HLLSeedingSettings(
+            enabled,
+            stage_one_players,
+            stage_two_players,
+            penalty_type,
+        )
         await self.cog.config.guild(guild).hll_seeding.set(settings.to_config())
         self.reset_guild(guild.id)
         return settings
@@ -194,6 +220,7 @@ class HLLSeedingModule:
         self._violations.pop(guild_id, None)
         self._hq_violations.pop(guild_id, None)
         self._sessions.pop(guild_id, None)
+        self._seeding_stages.pop(guild_id, None)
         self._active_guilds.discard(guild_id)
         self._hq_active_guilds.discard(guild_id)
         self._next_status_scan_at.pop(guild_id, None)
@@ -201,7 +228,10 @@ class HLLSeedingModule:
         self._position_failure_counts.pop(guild_id, None)
 
     async def inspect_server(self, guild: discord.Guild) -> HLLSeedingInspection:
-        return await self._inspect_server(guild, find_fourth_point_offenders)
+        return await self._inspect_server(
+            guild,
+            lambda session, players: find_seeding_offenders(session, players, 0),
+        )
 
     async def inspect_hq_server(self, guild: discord.Guild) -> HLLSeedingInspection:
         return await self._inspect_server(guild, find_hq_offenders)
@@ -306,16 +336,24 @@ class HLLSeedingModule:
                 minimum=0,
                 maximum=1000,
             )
-            warfare = get_game_mode_id(session) == "warfare"
+            game_mode = get_game_mode_id(session)
+            warfare = game_mode == "warfare"
+            supported_seeding_mode = game_mode in {"warfare", "offensive"}
+            seeding_stage = get_seeding_stage(
+                player_count,
+                settings.stage_one_players,
+                settings.stage_two_players,
+            )
             seeding_active = (
                 settings.enabled
-                and warfare
-                and player_count <= settings.min_players
+                and supported_seeding_mode
+                and seeding_stage < 2
             )
             hq_active = hq_settings.enabled and warfare
 
             if not seeding_active:
                 self._active_guilds.discard(guild.id)
+                self._seeding_stages.pop(guild.id, None)
             if not hq_active:
                 self._hq_active_guilds.discard(guild.id)
 
@@ -324,7 +362,7 @@ class HLLSeedingModule:
                 # must fail closed instead of applying old or guessed sectors.
                 try:
                     if seeding_active:
-                        find_fourth_point_offenders(session, ())
+                        find_seeding_offenders(session, (), seeding_stage)
                     if hq_active:
                         find_hq_offenders(session, ())
                 except SeedingRuleError as exc:
@@ -332,6 +370,7 @@ class HLLSeedingModule:
                     return
                 if seeding_active:
                     self._active_guilds.add(guild.id)
+                    self._seeding_stages[guild.id] = seeding_stage
                 if hq_active:
                     self._hq_active_guilds.add(guild.id)
                 self._next_position_scan_at.setdefault(guild.id, 0)
@@ -353,7 +392,11 @@ class HLLSeedingModule:
             try:
                 players = await self._inspect_players(guild)
                 offenders = (
-                    find_fourth_point_offenders(session, players)
+                    find_seeding_offenders(
+                        session,
+                        players,
+                        self._seeding_stages[guild.id],
+                    )
                     if guild.id in self._active_guilds
                     else ()
                 )
@@ -538,6 +581,7 @@ class HLLSeedingModule:
         self._violations.pop(guild_id, None)
         self._hq_violations.pop(guild_id, None)
         self._sessions.pop(guild_id, None)
+        self._seeding_stages.pop(guild_id, None)
         self._active_guilds.discard(guild_id)
         self._hq_active_guilds.discard(guild_id)
         self._next_position_scan_at.pop(guild_id, None)
@@ -572,13 +616,13 @@ class HLLSeedingModule:
     @staticmethod
     def _warning_message(remaining: int) -> str:
         return (
-            "SEEDING RULE: Leave the enemy fourth capture sector. "
+            "SEEDING RULE: Leave the currently locked capture sector. "
             f"You will be punished in {remaining} second{'s' if remaining != 1 else ''}."
         )
 
     @staticmethod
     def _punishment_message() -> str:
-        return "SEEDING RULE: Enemy fourth-point capture is locked during seeding."
+        return "SEEDING RULE: This capture sector is locked at the current seeding stage."
 
     @staticmethod
     def _hq_warning_message(remaining: int) -> str:
@@ -613,10 +657,11 @@ class HLLSeedingCommandsMixin:
 
     @HLLVN_COMMAND_GROUP.command(
         name="seeding",
-        description="Configure automatic fourth-point protection while seeding.",
+        description="Configure two-stage Warfare and Offensive seeding protection.",
     )
     @app_commands.describe(
-        min_players="Enforce while player count is at or below this number.",
+        stage_one_players="Unlock the next objective when this population is reached.",
+        stage_two_players="Fully unlock objectives when this population is reached.",
         penalty_type="Warn for five seconds first, or punish immediately.",
         toggle="Enable or disable seeding protection.",
     )
@@ -640,13 +685,21 @@ class HLLSeedingCommandsMixin:
     async def hllvn_seeding(
         self,
         interaction: discord.Interaction,
-        min_players: app_commands.Range[int, 1, 100],
+        stage_one_players: app_commands.Range[int, 1, 99],
+        stage_two_players: app_commands.Range[int, 2, 100],
         penalty_type: app_commands.Choice[str],
         toggle: app_commands.Choice[str],
     ) -> None:
         if not await self.is_authorized(interaction.user):
             await interaction.response.send_message(
                 "You are not authorized to use HLL: Vietnam administration commands.",
+                ephemeral=True,
+            )
+            return
+
+        if stage_one_players >= stage_two_players:
+            await interaction.response.send_message(
+                "Stage 1 must be lower than Stage 2.",
                 ephemeral=True,
             )
             return
@@ -685,7 +738,8 @@ class HLLSeedingCommandsMixin:
         settings = await self.seeding.configure(
             guild,
             enabled=enabled,
-            min_players=min_players,
+            stage_one_players=stage_one_players,
+            stage_two_players=stage_two_players,
             penalty_type=penalty_type.value,
         )
         embed = discord.Embed(
@@ -699,8 +753,13 @@ class HLLSeedingCommandsMixin:
             inline=True,
         )
         embed.add_field(
-            name="Player threshold",
-            value=f"At or below `{settings.min_players}`",
+            name="Stage 1",
+            value=f"`{settings.stage_one_players}` players",
+            inline=True,
+        )
+        embed.add_field(
+            name="Stage 2",
+            value=f"`{settings.stage_two_players}` players (fully unlocked)",
             inline=True,
         )
         embed.add_field(
@@ -713,12 +772,21 @@ class HLLSeedingCommandsMixin:
             inline=False,
         )
         if enabled and inspection is not None:
-            runtime_status = (
-                "Active now"
-                if inspection.game_mode == "warfare"
-                and inspection.player_count <= settings.min_players
-                else "Standing by"
-            )
+            if inspection.game_mode in {"warfare", "offensive"}:
+                current_stage = get_seeding_stage(
+                    inspection.player_count,
+                    settings.stage_one_players,
+                    settings.stage_two_players,
+                )
+                runtime_status = (
+                    "Initial locks active"
+                    if current_stage == 0
+                    else "Stage 1 active"
+                    if current_stage == 1
+                    else "Stage 2 reached - fully unlocked"
+                )
+            else:
+                runtime_status = "Standing by"
             embed.add_field(
                 name="Current server",
                 value=(
@@ -728,7 +796,7 @@ class HLLSeedingCommandsMixin:
                 inline=False,
             )
         embed.set_footer(
-            text="Enforcement automatically suspends above the threshold and outside Warfare."
+            text="Population and match mode refresh every 60 seconds; Stage 2 fully unlocks."
         )
         await interaction.followup.send(
             embed=embed,

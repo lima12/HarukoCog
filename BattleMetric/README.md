@@ -48,7 +48,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn allowvipteamswap toggle:<choice>` - Authorized member. Enable or disable the VIP-only in-game `!changeteam` command.
 - `/hllvn adminping role:@role toggle:<choice>` - Authorized member. Configure Discord staff alerts for the in-game `!admin` command.
 - `/hllvn tkwatch toggle:<choice> channel:#channel threshold_per_min:3 watch_duration:15 exclude_commander:true` - Authorized member. Configure rolling team-kill threshold alerts and staff actions.
-- `/hllvn seeding min_players:40 penalty_type:<choice> toggle:<choice>` - Authorized member. Configure automatic fourth-point protection during seeding.
+- `/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:<choice> toggle:<choice>` - Authorized member. Configure two-stage Warfare and Offensive seeding protection.
 - `/hllvn hqprotection penalty_type:<choice> toggle:<choice>` - Authorized member. Protect each team's locked HQ sector from enemies.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
 - `[p]dogtag setup #channel` - Authorized member. Set the staff review channel for custom dog-tag submissions.
@@ -175,35 +175,40 @@ without its kill-feed workers when `hllrcon` is broken, allowing Server Info
 and the BattleMetrics API commands to remain available while the dependency is
 repaired.
 
-## Fourth-Point Seeding Protection
+## Two-Stage Seeding Protection
 
 Only bot owners and members authorized through `[p]bm auth add @member` can
 configure this rule. It uses the same HLL: Vietnam RCON endpoint, password,
 client, and connection lock as the kill feed. The Discord kill-feed channel
 does not need to be enabled.
 
-Configure the maximum seeding population, penalty behavior, and toggle through
-the slash-command choices:
+Configure both population stages, penalty behavior, and the toggle through the
+slash-command choices. Stage 1 must be lower than Stage 2:
 
 ```text
-/hllvn seeding min_players:40 penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
-/hllvn seeding min_players:40 penalty_type:"Punish immediately" toggle:Enable
-/hllvn seeding min_players:40 penalty_type:"Warning for 5 seconds, then punish" toggle:Disable
+/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
+/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Punish immediately" toggle:Enable
+/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Warning for 5 seconds, then punish" toggle:Disable
 ```
 
-While enabled, enforcement is active only on Warfare layers when the current
-population is at or below `min_players`. It automatically suspends above the
-threshold or outside Warfare, then resumes if the population drops or Warfare
-starts again. The saved toggle remains enabled so staff do not have to
-reconfigure it for every seeding period.
+While enabled on Warfare, the initial stage locks each side's fourth and fifth
+sectors. Reaching `stage_one_players` unlocks the fourth sector while the fifth
+remains locked. Reaching `stage_two_players` fully unlocks the map and suspends
+seeding enforcement. If population later drops below a threshold, the matching
+locks resume after the next status refresh.
 
-The worker protects both teams: Allies/South players are stopped in the fourth
-sector along their attack direction, and Axis/North players are stopped in the
-opposite fourth sector. Mirrored map direction is handled from `hllrcon` map
-metadata. Dead, unassigned, and defending players are ignored. The current
-RCON response does not identify which one of a sector's possible strongpoints
-is active, so the complete fourth capture sector is protected. This prevents a
-capture reliably and avoids guessing the active point.
+On Offensive, only the attacking team is restricted. Before Stage 1, attackers
+may advance through the second objective while the third through fifth sectors
+remain locked. Reaching Stage 1 opens the third objective while the fourth and
+fifth remain locked. Stage 2 fully unlocks the map. The defending team is never
+restricted by the seeding rule. `hllrcon` supplies the attacking-team identity,
+so the cog does not infer it from player names or scores.
+
+Mirrored map direction is handled from `hllrcon` map metadata. Dead and
+unassigned players are ignored. The RCON response does not identify which one
+of a sector's possible strongpoints is active, so the complete applicable
+capture sectors are protected. This prevents captures reliably and avoids
+guessing the active point.
 
 With warning-to-punish selected, a violating player receives an RCON warning
 approximately once per second for at least five seconds. They are killed only
@@ -211,13 +216,17 @@ after a fresh position scan confirms they are still in the protected sector.
 Immediate punishment skips the warning period. A player is not punished again
 until a scan observes them leave the sector and later return.
 
-Player count and match status are checked once every 60 seconds. Player-position
+Player count, game mode, and stage are checked once every 60 seconds. Player-position
 requests run every three seconds only while the cached status says protection
-is active. This means crossing the configured population threshold can take up
-to 60 seconds to suspend or resume enforcement. Warnings and punishments are
+is active. This means crossing either population threshold can take up to 60
+seconds to change enforcement. Warnings and punishments are
 serialized through the shared RCON lock, capped at 20 actions per rule in each
 worker pass, and position-request failures back off to 60 seconds. This module
 does not call BattleMetrics and sends no periodic Discord messages.
+
+Configurations saved by the former single-threshold command use the old
+`min_players` value as Stage 1 and default Stage 2 to 75 until an authorized
+member saves the new command.
 
 ## HQ Protection
 
