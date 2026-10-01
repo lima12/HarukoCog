@@ -118,6 +118,9 @@ Stage 1, the third after Stage 1, and all objectives after Stage 2. Defenders
 are not restricted. Use the same command with `Disable` to turn the feature off.
 Omitting `warning_seconds` keeps the saved duration, which defaults to five
 seconds. Reload `BattleMetric` and run `[p]slash sync` after updating the cog.
+Seeding and HQ enforcement silently wait for a ten-second settling period and
+a new position after joins, team changes, and observed deaths, so retained
+spawn-screen coordinates do not immediately trigger a warning.
 
 Authorized members can also protect both teams' locked HQ sectors from enemy
 spawn killing:

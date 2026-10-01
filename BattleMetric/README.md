@@ -204,11 +204,26 @@ fifth remain locked. Stage 2 fully unlocks the map. The defending team is never
 restricted by the seeding rule. `hllrcon` supplies the attacking-team identity,
 so the cog does not infer it from player names or scores.
 
-Mirrored map direction is handled from `hllrcon` map metadata. Dead and
-unassigned players are ignored. The RCON response does not identify which one
-of a sector's possible strongpoints is active, so the complete applicable
+Mirrored map direction is handled from `hllrcon` map metadata. Unassigned
+players and invalid or zero positions are ignored. The RCON response does not
+identify which one of a sector's possible strongpoints is active, so the complete applicable
 capture sectors are protected. This prevents captures reliably and avoids
 guessing the active point.
+
+To avoid alarming joining or team-switching players, territory enforcement
+waits silently for ten seconds after first observing a player, a team change,
+or a change in their death counter. It also requires a changed, valid position
+after that transition. Unchanged coordinates remain silent even after ten
+seconds, since RCON can retain a position while a player is waiting to spawn.
+Leaving the server or becoming unassigned clears readiness. The same guard
+applies to HQ protection and immediate-punishment mode. Only after the guard
+passes does the configured warning countdown begin.
+
+The RCON player response has no explicit alive/spawned flag; this guard uses
+observed team, death counter, and position changes rather than claiming exact
+life-state detection. Players first seen while stationary become eligible once
+a position change is observed. These observations stay in memory and are
+cleared on reload, layer changes, and RCON failures. They do not add API calls.
 
 With warning-to-punish selected, a violating player receives an RCON warning
 approximately once per second for the configured `warning_seconds` duration
@@ -252,8 +267,9 @@ features does not create duplicate polling loops.
 The rule runs on Warfare layers and protects both sides. On normal maps,
 Axis/North players are violations inside the Allies/South home sector, while
 Allies/South players are violations inside the Axis/North home sector. That
-mapping reverses automatically on mirrored maps. Defenders, dead players, and
-unassigned players are ignored.
+mapping reverses automatically on mirrored maps. Defenders and unassigned
+players are ignored, and the shared join/team-change/death guard suppresses
+enforcement until a fresh position is observed after settling.
 
 HLL RCON exposes player positions and sector geometry but not the individual HQ
 spawn locations. For predictable enforcement, this command protects the

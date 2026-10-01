@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +17,84 @@ class SeedingOffender:
     player_id: str
     player_name: str
     team_id: int
+
+
+@dataclass(frozen=True)
+class _PlayerSnapshot:
+    team_id: int
+    position: tuple[float, float, float]
+    deaths: int | None
+
+
+@dataclass
+class _PlayerReadiness:
+    snapshot: _PlayerSnapshot
+    ready_at: float
+    position_changed: bool = False
+
+
+class TerritoryPlayerTracker:
+    """Wait for fresh positions after player transitions without an alive flag."""
+
+    def __init__(self, settling_seconds: float = 10):
+        self.settling_seconds = settling_seconds
+        self._players: dict[str, _PlayerReadiness] = {}
+
+    def eligible_players(self, players: Iterable[Any], now: float) -> tuple[Any, ...]:
+        eligible = []
+        observed: dict[str, _PlayerReadiness] = {}
+        for player in players:
+            player_id = str(getattr(player, "id", "")).strip()
+            snapshot = _get_player_snapshot(player)
+            if not player_id or snapshot is None:
+                continue
+
+            previous = self._players.get(player_id)
+            transitioned = previous is None or (
+                snapshot.team_id != previous.snapshot.team_id
+                or (
+                    snapshot.deaths is not None
+                    and previous.snapshot.deaths is not None
+                    and snapshot.deaths != previous.snapshot.deaths
+                )
+            )
+            if transitioned:
+                state = _PlayerReadiness(snapshot, now + self.settling_seconds)
+            else:
+                state = _PlayerReadiness(
+                    snapshot,
+                    previous.ready_at,
+                    previous.position_changed
+                    or snapshot.position != previous.snapshot.position,
+                )
+            observed[player_id] = state
+            if state.position_changed and now >= state.ready_at:
+                eligible.append(player)
+
+        # Departed, unassigned, and invalid-position players lose readiness.
+        self._players = observed
+        return tuple(eligible)
+
+
+def _get_player_snapshot(player: Any) -> _PlayerSnapshot | None:
+    try:
+        position = tuple(float(value) for value in player.world_position)
+        faction = player.faction
+        team_id = int(faction.team.id) if faction is not None else 0
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if (
+        team_id not in {1, 2}
+        or len(position) != 3
+        or position == (0.0, 0.0, 0.0)
+        or not all(math.isfinite(value) for value in position)
+    ):
+        return None
+
+    deaths = _optional_nonnegative_int(
+        getattr(getattr(player, "stats", None), "deaths", None)
+    )
+    return _PlayerSnapshot(team_id, position, deaths)
 
 
 def get_game_mode_id(session: Any) -> str:
@@ -93,23 +172,12 @@ def _find_players_in_sectors(
 ) -> tuple[SeedingOffender, ...]:
     offenders: list[SeedingOffender] = []
     for player in players:
-        position = getattr(player, "world_position", None)
-        if position is None:
+        snapshot = _get_player_snapshot(player)
+        if snapshot is None:
             continue
-        try:
-            world_position = tuple(float(value) for value in position)
-        except (TypeError, ValueError):
-            continue
-        if len(world_position) < 3 or world_position[:3] == (0.0, 0.0, 0.0):
-            continue
-
-        try:
-            faction = player.faction
-            team_id = int(faction.team.id) if faction is not None else 0
-        except (AttributeError, TypeError, ValueError):
-            continue
+        team_id = snapshot.team_id
         targets = target_by_team.get(team_id, ())
-        if not any(target.is_inside(world_position[:2]) for target in targets):
+        if not any(target.is_inside(snapshot.position[:2]) for target in targets):
             continue
 
         player_id = str(getattr(player, "id", "")).strip()
@@ -168,26 +236,15 @@ def find_hq_offenders(
 
     offenders: list[SeedingOffender] = []
     for player in players:
-        position = getattr(player, "world_position", None)
-        if position is None:
+        snapshot = _get_player_snapshot(player)
+        if snapshot is None:
             continue
-        try:
-            world_position = tuple(float(value) for value in position)
-        except (TypeError, ValueError):
-            continue
-        if len(world_position) < 3 or world_position[:3] == (0.0, 0.0, 0.0):
-            continue
-
-        try:
-            faction = player.faction
-            team_id = int(faction.team.id) if faction is not None else 0
-        except (AttributeError, TypeError, ValueError):
-            continue
+        team_id = snapshot.team_id
         target = target_by_attacking_team.get(team_id)
         if (
             target is None
             or score_by_attacking_team.get(team_id, 0) >= 4
-            or not target.is_inside(world_position[:2])
+            or not target.is_inside(snapshot.position[:2])
         ):
             continue
 
@@ -206,9 +263,13 @@ def find_hq_offenders(
 
 
 def _nonnegative_int(value: object) -> int:
+    return _optional_nonnegative_int(value) or 0
+
+
+def _optional_nonnegative_int(value: object) -> int | None:
     if isinstance(value, bool):
-        return 0
+        return None
     try:
         return max(0, int(value))
     except (TypeError, ValueError):
-        return 0
+        return None

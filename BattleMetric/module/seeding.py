@@ -19,6 +19,7 @@ from .kill_feed import KillFeedConnectionTestError
 from .seeding_rules import (
     SeedingOffender,
     SeedingRuleError,
+    TerritoryPlayerTracker,
     find_hq_offenders,
     find_seeding_offenders,
     get_game_mode_id,
@@ -86,6 +87,7 @@ class HLLSeedingModule:
     DEFAULT_STAGE_TWO_PLAYERS = 75
     STATUS_SCAN_INTERVAL_SECONDS = 60
     POSITION_SCAN_INTERVAL_SECONDS = 3
+    PLAYER_SETTLING_SECONDS = 10
     WORKER_INTERVAL_SECONDS = 1
     WARNING_INTERVAL_SECONDS = 1
     WARNING_GRACE_SECONDS = 5
@@ -112,6 +114,7 @@ class HLLSeedingModule:
         self._hq_violations: dict[int, dict[str, _ViolationState]] = {}
         self._sessions: dict[int, Any] = {}
         self._seeding_stages: dict[int, int] = {}
+        self._player_trackers: dict[int, TerritoryPlayerTracker] = {}
         self._active_guilds: set[int] = set()
         self._hq_active_guilds: set[int] = set()
         self._next_status_scan_at: dict[int, float] = {}
@@ -134,6 +137,7 @@ class HLLSeedingModule:
         self._hq_violations.clear()
         self._sessions.clear()
         self._seeding_stages.clear()
+        self._player_trackers.clear()
         self._active_guilds.clear()
         self._hq_active_guilds.clear()
         self._next_status_scan_at.clear()
@@ -242,6 +246,7 @@ class HLLSeedingModule:
         self._hq_violations.pop(guild_id, None)
         self._sessions.pop(guild_id, None)
         self._seeding_stages.pop(guild_id, None)
+        self._player_trackers.pop(guild_id, None)
         self._active_guilds.discard(guild_id)
         self._hq_active_guilds.discard(guild_id)
         self._next_status_scan_at.pop(guild_id, None)
@@ -345,6 +350,19 @@ class HLLSeedingModule:
                 return
 
             now = time.monotonic()
+            previous_session = self._sessions.get(guild.id)
+            if previous_session is None or (
+                get_game_mode_id(session),
+                getattr(session, "map_id", getattr(session, "map_name", None)),
+            ) != (
+                get_game_mode_id(previous_session),
+                getattr(
+                    previous_session,
+                    "map_id",
+                    getattr(previous_session, "map_name", None),
+                ),
+            ):
+                self._player_trackers.pop(guild.id, None)
             self._sessions[guild.id] = session
             self._violations.pop(guild.id, None)
             self._hq_violations.pop(guild.id, None)
@@ -397,6 +415,7 @@ class HLLSeedingModule:
                 self._next_position_scan_at.setdefault(guild.id, 0)
             else:
                 self._next_position_scan_at.pop(guild.id, None)
+                self._player_trackers.pop(guild.id, None)
 
         if (
             guild.id not in self._active_guilds
@@ -412,17 +431,23 @@ class HLLSeedingModule:
             fresh_scan = True
             try:
                 players = await self._inspect_players(guild)
+                now = time.monotonic()
+                tracker = self._player_trackers.setdefault(
+                    guild.id,
+                    TerritoryPlayerTracker(self.PLAYER_SETTLING_SECONDS),
+                )
+                eligible_players = tracker.eligible_players(players, now)
                 offenders = (
                     find_seeding_offenders(
                         session,
-                        players,
+                        eligible_players,
                         self._seeding_stages[guild.id],
                     )
                     if guild.id in self._active_guilds
                     else ()
                 )
                 hq_offenders = (
-                    find_hq_offenders(session, players)
+                    find_hq_offenders(session, eligible_players)
                     if guild.id in self._hq_active_guilds
                     else ()
                 )
@@ -480,7 +505,7 @@ class HLLSeedingModule:
                 del states[player_id]
         for offender in offenders:
             state = states.get(offender.player_id)
-            if state is None:
+            if state is None or state.offender.team_id != offender.team_id:
                 states[offender.player_id] = _ViolationState(offender, now, now)
             else:
                 state.offender = offender
@@ -606,6 +631,7 @@ class HLLSeedingModule:
         self._hq_violations.pop(guild_id, None)
         self._sessions.pop(guild_id, None)
         self._seeding_stages.pop(guild_id, None)
+        self._player_trackers.pop(guild_id, None)
         self._active_guilds.discard(guild_id)
         self._hq_active_guilds.discard(guild_id)
         self._next_position_scan_at.pop(guild_id, None)
@@ -623,6 +649,7 @@ class HLLSeedingModule:
     def _record_position_failure(self, guild_id: int, exc: Exception) -> None:
         self._violations.pop(guild_id, None)
         self._hq_violations.pop(guild_id, None)
+        self._player_trackers.pop(guild_id, None)
         failure_count = self._position_failure_counts.get(guild_id, 0) + 1
         self._position_failure_counts[guild_id] = failure_count
         retry_delay = min(
