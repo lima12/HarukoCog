@@ -48,7 +48,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn allowvipteamswap toggle:<choice>` - Authorized member. Enable or disable the VIP-only in-game `!changeteam` command.
 - `/hllvn adminping role:@role toggle:<choice>` - Authorized member. Configure Discord staff alerts for the in-game `!admin` command.
 - `/hllvn tkwatch toggle:<choice> channel:#channel threshold_per_min:3 watch_duration:15 exclude_commander:true` - Authorized member. Configure rolling team-kill threshold alerts and staff actions.
-- `/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:<choice> toggle:<choice>` - Authorized member. Configure two-stage Warfare and Offensive seeding protection.
+- `/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:<choice> toggle:<choice> warning_seconds:15` - Authorized member. Configure two-stage Warfare and Offensive seeding protection with an optional 5-30 second warning duration.
 - `/hllvn hqprotection penalty_type:<choice> toggle:<choice>` - Authorized member. Protect each team's locked HQ sector from enemies.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
 - `[p]dogtag setup #channel` - Authorized member. Set the staff review channel for custom dog-tag submissions.
@@ -186,9 +186,9 @@ Configure both population stages, penalty behavior, and the toggle through the
 slash-command choices. Stage 1 must be lower than Stage 2:
 
 ```text
-/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
+/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Warning, then punish" toggle:Enable warning_seconds:15
 /hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Punish immediately" toggle:Enable
-/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Warning for 5 seconds, then punish" toggle:Disable
+/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Warning, then punish" toggle:Disable
 ```
 
 While enabled on Warfare, the initial stage locks each side's fourth and fifth
@@ -211,10 +211,18 @@ capture sectors are protected. This prevents captures reliably and avoids
 guessing the active point.
 
 With warning-to-punish selected, a violating player receives an RCON warning
-approximately once per second for at least five seconds. They are killed only
+approximately once per second for the configured `warning_seconds` duration
+(5-30 seconds). This setting is saved per guild and applies to both seeding
+stages on Warfare and Offensive. Omitting it keeps the saved duration; existing
+configurations and new guilds default to five seconds. Players are killed only
 after a fresh position scan confirms they are still in the protected sector.
+The three-second position scan can extend the actual wait past the configured
+duration.
 Immediate punishment skips the warning period. A player is not punished again
 until a scan observes them leave the sector and later return.
+
+After updating this command, run `[p]reload BattleMetric` and `[p]slash sync`
+to expose the new `warning_seconds` option.
 
 Player count, game mode, and stage are checked once every 60 seconds. Player-position
 requests run every three seconds only while the cached status says protection

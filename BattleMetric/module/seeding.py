@@ -34,6 +34,7 @@ class HLLSeedingSettings:
     stage_one_players: int
     stage_two_players: int
     penalty_type: str
+    warning_seconds: int = 5
 
     def to_config(self) -> dict[str, bool | int | str]:
         return {
@@ -41,6 +42,7 @@ class HLLSeedingSettings:
             "stage_one_players": self.stage_one_players,
             "stage_two_players": self.stage_two_players,
             "penalty_type": self.penalty_type,
+            "warning_seconds": self.warning_seconds,
         }
 
 
@@ -87,6 +89,8 @@ class HLLSeedingModule:
     WORKER_INTERVAL_SECONDS = 1
     WARNING_INTERVAL_SECONDS = 1
     WARNING_GRACE_SECONDS = 5
+    MIN_WARNING_SECONDS = 5
+    MAX_WARNING_SECONDS = 30
     MAX_ACTIONS_PER_TICK = 20
     MAX_RETRY_SECONDS = 60
 
@@ -95,6 +99,7 @@ class HLLSeedingModule:
         "stage_one_players": DEFAULT_STAGE_ONE_PLAYERS,
         "stage_two_players": DEFAULT_STAGE_TWO_PLAYERS,
         "penalty_type": PENALTY_WARNING,
+        "warning_seconds": WARNING_GRACE_SECONDS,
     }
     _EMPTY_HQ_SETTINGS: ClassVar[dict[str, bool | str]] = {
         "enabled": False,
@@ -163,6 +168,12 @@ class HLLSeedingModule:
             stage_one_players=stage_one_players,
             stage_two_players=stage_two_players,
             penalty_type=penalty_type,
+            warning_seconds=self._bounded_int(
+                raw.get("warning_seconds"),
+                default=self.WARNING_GRACE_SECONDS,
+                minimum=self.MIN_WARNING_SECONDS,
+                maximum=self.MAX_WARNING_SECONDS,
+            ),
         )
 
     async def get_hq_settings(self, guild: discord.Guild) -> HLLHQProtectionSettings:
@@ -185,6 +196,7 @@ class HLLSeedingModule:
         stage_one_players: int,
         stage_two_players: int,
         penalty_type: str,
+        warning_seconds: int | None = None,
     ) -> HLLSeedingSettings:
         if not 1 <= stage_one_players < stage_two_players <= 100:
             raise ValueError(
@@ -192,11 +204,20 @@ class HLLSeedingModule:
             )
         if penalty_type not in self.VALID_PENALTIES:
             raise ValueError("Choose warning-to-punish or immediate punishment.")
+        if warning_seconds is None:
+            warning_seconds = (await self.get_settings(guild)).warning_seconds
+        if (
+            isinstance(warning_seconds, bool)
+            or not isinstance(warning_seconds, int)
+            or not self.MIN_WARNING_SECONDS <= warning_seconds <= self.MAX_WARNING_SECONDS
+        ):
+            raise ValueError("Warning duration must be between 5 and 30 seconds.")
         settings = HLLSeedingSettings(
             enabled,
             stage_one_players,
             stage_two_players,
             penalty_type,
+            warning_seconds,
         )
         await self.cog.config.guild(guild).hll_seeding.set(settings.to_config())
         self.reset_guild(guild.id)
@@ -476,6 +497,7 @@ class HLLSeedingModule:
         await self._apply_rule_actions(
             guild,
             penalty_type=settings.penalty_type,
+            warning_grace_seconds=settings.warning_seconds,
             states=self._violations.get(guild.id, {}),
             now=now,
             fresh_scan=fresh_scan,
@@ -495,6 +517,7 @@ class HLLSeedingModule:
         await self._apply_rule_actions(
             guild,
             penalty_type=settings.penalty_type,
+            warning_grace_seconds=self.WARNING_GRACE_SECONDS,
             states=self._hq_violations.get(guild.id, {}),
             now=now,
             fresh_scan=fresh_scan,
@@ -508,6 +531,7 @@ class HLLSeedingModule:
         guild: discord.Guild,
         *,
         penalty_type: str,
+        warning_grace_seconds: int,
         states: dict[str, _ViolationState],
         now: float,
         fresh_scan: bool,
@@ -521,19 +545,19 @@ class HLLSeedingModule:
                 continue
             elapsed = now - state.first_seen
             should_punish = penalty_type == self.PENALTY_PUNISH or (
-                fresh_scan and elapsed >= self.WARNING_GRACE_SECONDS
+                fresh_scan and elapsed >= warning_grace_seconds
             )
             if should_punish:
                 actions.append(("punish", state, punishment_message))
             elif (
                 penalty_type == self.PENALTY_WARNING
-                and elapsed < self.WARNING_GRACE_SECONDS
+                and elapsed < warning_grace_seconds
                 and (
                     state.last_warning is None
                     or now - state.last_warning >= self.WARNING_INTERVAL_SECONDS
                 )
             ):
-                remaining = max(1, math.ceil(self.WARNING_GRACE_SECONDS - elapsed))
+                remaining = max(1, math.ceil(warning_grace_seconds - elapsed))
                 actions.append(("warning", state, warning_message(remaining)))
             if len(actions) >= self.MAX_ACTIONS_PER_TICK:
                 break
@@ -662,13 +686,14 @@ class HLLSeedingCommandsMixin:
     @app_commands.describe(
         stage_one_players="Unlock the next objective when this population is reached.",
         stage_two_players="Fully unlock objectives when this population is reached.",
-        penalty_type="Warn for five seconds first, or punish immediately.",
+        penalty_type="Warn for the configured duration first, or punish immediately.",
         toggle="Enable or disable seeding protection.",
+        warning_seconds="Warning duration (5-30 seconds). Omit to keep the saved duration.",
     )
     @app_commands.choices(
         penalty_type=[
             app_commands.Choice(
-                name="Warning for 5 seconds, then punish",
+                name="Warning, then punish",
                 value=HLLSeedingModule.PENALTY_WARNING,
             ),
             app_commands.Choice(
@@ -689,6 +714,7 @@ class HLLSeedingCommandsMixin:
         stage_two_players: app_commands.Range[int, 2, 100],
         penalty_type: app_commands.Choice[str],
         toggle: app_commands.Choice[str],
+        warning_seconds: app_commands.Range[int, 5, 30] | None = None,
     ) -> None:
         if not await self.is_authorized(interaction.user):
             await interaction.response.send_message(
@@ -700,6 +726,17 @@ class HLLSeedingCommandsMixin:
         if stage_one_players >= stage_two_players:
             await interaction.response.send_message(
                 "Stage 1 must be lower than Stage 2.",
+                ephemeral=True,
+            )
+            return
+
+        if warning_seconds is not None and (
+            isinstance(warning_seconds, bool)
+            or not isinstance(warning_seconds, int)
+            or not 5 <= warning_seconds <= 30
+        ):
+            await interaction.response.send_message(
+                "Warning duration must be between 5 and 30 seconds.",
                 ephemeral=True,
             )
             return
@@ -741,6 +778,7 @@ class HLLSeedingCommandsMixin:
             stage_one_players=stage_one_players,
             stage_two_players=stage_two_players,
             penalty_type=penalty_type.value,
+            warning_seconds=warning_seconds,
         )
         embed = discord.Embed(
             title="HLL VN Seeding Protection",
@@ -765,7 +803,7 @@ class HLLSeedingCommandsMixin:
         embed.add_field(
             name="Penalty",
             value=(
-                "Warn for 5 seconds, then punish"
+                f"Warn for {settings.warning_seconds} seconds, then punish"
                 if settings.penalty_type == HLLSeedingModule.PENALTY_WARNING
                 else "Punish immediately"
             ),

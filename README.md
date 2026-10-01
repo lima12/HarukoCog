@@ -102,11 +102,11 @@ The RCON port may differ from the public game/query port. Kill events are
 queued and pooled into at most one Discord embed every three seconds.
 
 Authorized members can enable two-stage seeding protection for Warfare and
-Offensive. Choose whether offenders receive a five-second warning before they
-are killed or are punished immediately:
+Offensive. Choose whether offenders receive a configurable 5-30 second warning
+before they are killed or are punished immediately:
 
 ```text
-/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Warning for 5 seconds, then punish" toggle:Enable
+/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:"Warning, then punish" toggle:Enable warning_seconds:15
 ```
 
 The rule checks player count and match status every 60 seconds, then polls
@@ -116,6 +116,8 @@ before Stage 1, only the fifth remains locked after Stage 1, and Stage 2 fully
 unlocks the map. On Offensive, attackers can reach the second objective before
 Stage 1, the third after Stage 1, and all objectives after Stage 2. Defenders
 are not restricted. Use the same command with `Disable` to turn the feature off.
+Omitting `warning_seconds` keeps the saved duration, which defaults to five
+seconds. Reload `BattleMetric` and run `[p]slash sync` after updating the cog.
 
 Authorized members can also protect both teams' locked HQ sectors from enemy
 spawn killing:
