@@ -351,6 +351,12 @@ line and limited to 1,000 characters. The command uses the kill feed module's
 shared, serialized RCON client and does not require the Discord kill-feed output
 to be enabled.
 
+Discord command replies are public in the channel where `/hllvn mesg` is used.
+The confirmation embed shows the target, game account ID when applicable, and
+message text so other administrators can see what was sent. Anyone with access
+to that channel can see the reply. Authorization denials remain private, and
+the confirmation does not ping the target or mentions in the message.
+
 ## Timed HLL VIPs
 
 `/hllvn addvip` uses the same HLL: Vietnam RCON endpoint, password, client, and

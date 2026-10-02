@@ -81,7 +81,7 @@ class HLLMessagingCommandsMixin:
             )
             return
 
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.response.defer(thinking=True, ephemeral=False)
         guild = interaction.guild
         if guild is None:
             await interaction.followup.send("This command can only be used in a server.")
@@ -187,5 +187,6 @@ class HLLMessagingCommandsMixin:
         embed.add_field(name="Message", value=message, inline=False)
         await interaction.followup.send(
             embed=embed,
+            ephemeral=False,
             allowed_mentions=discord.AllowedMentions.none(),
         )

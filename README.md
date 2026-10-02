@@ -202,6 +202,8 @@ account ID, or every connected player:
 The `target` option is text so it can accept all three forms. Linked mentions
 must be members of the Discord server with a verified `/link`. These operations
 reuse the shared serialized HLL RCON client.
+The `/hllvn mesg` confirmation is public in the command channel and shows the
+target and message for other administrators. Authorization denials stay private.
 
 Authorized members can reward everyone currently on the game server with timed
 VIP and a private in-game thank-you popup:

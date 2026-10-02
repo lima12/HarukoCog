@@ -17,5 +17,6 @@ __red_end_user_data_statement__ = (
     "Discord-to-EOS links and aggregated HLL statistics in PostgreSQL, plus staged "
     "or approved dog-tag overlays in the configured host directory. Moderation commands "
     "send game IDs, messages, reasons, durations, and acting Discord administrator "
-    "identities to the configured external services."
+    "identities to the configured external services. In-game message confirmations "
+    "publicly display targets and message text in the Discord command channel."
 )
