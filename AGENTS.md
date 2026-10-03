@@ -215,9 +215,10 @@ cleanly if voice-channel chat is unavailable.
 
 ## Validation and handoff
 
-The dependency-free territory-protection regressions run with
-`python -m unittest discover -s tests -v`. There is no CI configuration, so
-validation must also be explicit and proportional to the change.
+Run regressions with `python -m unittest discover -s tests -v`. Territory-protection
+tests are dependency-free; TK-watch workflow tests need `discord.py` and mock Red
+and RCON (they are skipped if Discord is unavailable). There is no CI
+configuration, so validation must also be explicit and proportional to the change.
 
 - Parse every Python file with `ast.parse` for a dependency-free syntax check.
   Prefer this over `py_compile` when you do not want to create `__pycache__`.

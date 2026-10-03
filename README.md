@@ -265,15 +265,20 @@ Authorized members can also configure rolling team-kill alerts with staff action
 buttons:
 
 ```text
-/hllvn tkwatch toggle:Enable channel:#admin-alerts threshold_per_min:3 watch_duration:15 exclude_commander:true
+/hllvn tkwatch toggle:Enable channel:#admin-alerts threshold_per_min:3 watch_duration:15 exclude_commander:true role:@Admins
 ```
 
 Reaching the threshold within one rolling minute posts a 15-minute action card.
-Staff can warn the player, warn and watch them for the configured 1-90 minutes,
-or kick them immediately. A watched player's next team kill triggers an
-automatic kick. Commander exclusion uses the live in-game role; when disabled,
-Commander alerts are explicitly labeled. The configuration command and every
-button are limited to users authorized through `[p]bm auth` and bot owners.
+The player is warned automatically; staff can **Forgive**, **Warn & Watch** for
+the configured 1-90 minutes, or **Kick**. With no staff decision after five
+minutes, Warn & Watch starts automatically. Forgive can cancel the watch until
+15 minutes after alert creation. A watched player's next team kill triggers an
+automatic kick. Decisions and timeouts remove buttons rather than deleting the
+alert embed; an active watch retains Forgive and Kick until the deadline. The
+optional role is pinged once per new alert. Commander exclusion uses the live
+in-game role; when disabled, Commander alerts are explicitly labeled. The
+configuration command and every button are limited to users authorized through
+`[p]bm auth` and bot owners. Reload the cog and run `[p]slash sync` after updating.
 
 For the dog-tag carving site, configure the shared IPC secret and staff review
 channel after deploying `tagweb`:

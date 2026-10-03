@@ -47,7 +47,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
 - `/hllvn allowvipteamswap toggle:<choice>` - Authorized member. Enable or disable the VIP-only in-game `!changeteam` command.
 - `/hllvn adminping role:@role toggle:<choice>` - Authorized member. Configure Discord staff alerts for the in-game `!admin` command.
-- `/hllvn tkwatch toggle:<choice> channel:#channel threshold_per_min:3 watch_duration:15 exclude_commander:true` - Authorized member. Configure rolling team-kill threshold alerts and staff actions.
+- `/hllvn tkwatch toggle:<choice> channel:#channel threshold_per_min:3 watch_duration:15 exclude_commander:true role:@role` - Authorized member. Configure automatic team-kill warnings, timed watches, staff actions, and an optional role ping.
 - `/hllvn seeding stage_one_players:60 stage_two_players:75 penalty_type:<choice> toggle:<choice> warning_seconds:15` - Authorized member. Configure two-stage Warfare and Offensive seeding protection with an optional 5-30 second warning duration.
 - `/hllvn hqprotection penalty_type:<choice> toggle:<choice>` - Authorized member. Protect each team's locked HQ sector from enemies.
 - `/hllvn buyvip` - Any guild member. Exchange confirmed kills for timed HLL VIP access.
@@ -481,7 +481,7 @@ Authorized members can configure rolling team-kill detection and choose the
 Discord channel where staff action cards are sent:
 
 ```text
-/hllvn tkwatch toggle:Enable channel:#admin-alerts threshold_per_min:3 watch_duration:15 exclude_commander:true
+/hllvn tkwatch toggle:Enable channel:#admin-alerts threshold_per_min:3 watch_duration:15 exclude_commander:true role:@Admins
 /hllvn tkwatch toggle:Disable
 ```
 
@@ -493,22 +493,40 @@ and members authorized through `[p]bm auth add`; checks happen before any defer,
 configuration read, database access, or RCON action.
 
 Each alert contains the player's name, EOS ID, team, current in-game role,
-threshold count, latest victim, and weapon. The staff controls are:
+threshold count, latest victim, and weapon. Reaching the threshold automatically
+sends `your Team Kill have been noticed by admin. Please avoid TK by all cost`
+through RCON, without waiting for staff. The staff controls are:
 
-- **Warn** sends `your Team Kill have been noticed by admin. Please avoid TK by all cost` through RCON.
-- **Warn & Watch** sends the warning and persists a watch for the configured duration. The player's next team kill while watched triggers an automatic kick.
+- **Forgive** cancels the pending five-minute default or removes an active watch. It cannot undo a warning already delivered or a completed kick.
+- **Warn & Watch** sends another warning and persists a watch for the configured duration, starting when the action succeeds. The player's next team kill while watched triggers an automatic kick; older queued kills do not trigger that watch.
 - **Kick** immediately removes the player from the game server through RCON.
 
-Alert buttons and their Discord message are valid for 15 minutes. The message
-is deleted when that window ends, even after a cog reload. Once staff acts, the
-buttons are disabled and the action is recorded on the embed until deletion.
-Pending alerts and active watches are cleared immediately when the feature is
-disabled.
+With no staff decision after five minutes, **Warn & Watch** is applied
+automatically. **Forgive** and **Kick** remain available until 15 minutes after
+the original alert was created, including after a manual or automatic watch
+starts. **Warn & Watch** is disabled once the watch starts, so the same alert
+cannot repeatedly extend it. Forgiving or kicking removes all buttons. At the
+15-minute deadline, any remaining buttons are removed; the watch continues for
+its configured duration unless forgiven before that deadline. The embed and its
+recorded decision are retained in Discord, not deleted. Disabling the feature
+clears pending alerts and active watches and removes their buttons while keeping
+the messages.
 
-When `exclude_commander` is true, a current Commander is ignored. The role is
+The optional `role` is pinged only when a new threshold alert is posted.
+Warnings, decision updates, and retries do not repeat the ping. The role must be
+mentionable, or the bot must have permission to mention roles in the channel;
+`@everyone` is not accepted. Enable the feature without `role` to clear its role
+ping. After updating the cog, run `[p]reload BattleMetric` and `[p]slash sync` so
+Discord exposes the new option.
+
+The `exclude_commander` option is retained and defaults to true. A current
+Commander is ignored: no threshold alert, automatic warning, watch, or automatic
+kick is issued for their TKs. Staff Warn & Watch and Kick buttons also recheck
+the role, closing the alert and cancelling its watch instead of acting on a
+player who became Commander after the alert was posted. The role is
 verified from live RCON player data when a threshold or watched-player decision
 is required. If RCON cannot verify the role, the fail-safe behavior is to skip
-the alert or automatic kick. When commander exclusion is false, Commanders are
+the alert, warning/watch, or kick. When commander exclusion is false, Commanders are
 included and the embed explicitly identifies the Commander role.
 
 Team-kill watch consumes the existing shared admin-log poll; it does not create
@@ -516,7 +534,12 @@ another RCON client. Overlapping logs are deduplicated and queued in a bounded
 in-memory buffer so Discord delivery and role checks cannot delay the log poll.
 All player messages, role lookups, and kicks use the shared per-guild serialized
 RCON command path. Active Warn & Watch records and 15-minute action routing are
-stored in Red Config so they continue across reloads, while rolling counters and
+stored in Red Config along with warning delivery state, five-minute default
+deadlines, role configuration, and decisions so they continue across reloads.
+Failed warning/default actions retry with exponential backoff up to 60 seconds
+without creating extra alerts or pretending a watch started. An overdue default
+is recovered when RCON becomes available, even if the button window has already
+closed; its watch starts on successful recovery. Rolling counters and
 deduplication caches are intentionally runtime-only.
 
 ## HLL Database And Account Linking

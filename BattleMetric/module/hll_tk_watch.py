@@ -7,7 +7,7 @@ import logging
 import time
 from collections import OrderedDict, deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, Literal
 
@@ -29,7 +29,7 @@ else:
     HLLRCON_MODEL_IMPORT_ERROR = None
 
 
-TKAction = Literal["warn", "warn_watch", "kick"]
+TKAction = Literal["forgive", "warn_watch", "kick"]
 
 
 class HLLTKWatchChannelUnavailable(RuntimeError):
@@ -56,12 +56,14 @@ class HLLTKWatchRecord:
     eos_id: str
     player_name: str
     expires_at: int
+    starts_at: float = 0.0
 
-    def to_config(self) -> dict[str, str | int]:
+    def to_config(self) -> dict[str, str | int | float]:
         return {
             "eos_id": self.eos_id,
             "player_name": self.player_name,
             "expires_at": self.expires_at,
+            "starts_at": self.starts_at,
         }
 
 
@@ -77,6 +79,9 @@ class HLLTKAlertRecord:
     watch_duration_minutes: int
     expires_at: int
     status: str = "active"
+    default_action_at: int = 0
+    warning_sent: bool = False
+    decision: str = ""
 
     def to_config(self) -> dict[str, str | int]:
         return {
@@ -88,27 +93,31 @@ class HLLTKAlertRecord:
             "watch_duration_minutes": self.watch_duration_minutes,
             "expires_at": self.expires_at,
             "status": self.status,
+            "default_action_at": self.default_action_at,
+            "warning_sent": self.warning_sent,
+            "decision": self.decision,
         }
 
 
 class HLLTKWatchActionView(discord.ui.View):
     """Persistent staff actions routed by the alert message ID."""
 
-    def __init__(self, module: HLLTKWatchModule):
+    def __init__(self, module: HLLTKWatchModule, *, watching: bool = False):
         super().__init__(timeout=None)
         self.module = module
+        self.warn_watch.disabled = watching
 
     @discord.ui.button(
-        label="Warn",
+        label="Forgive",
         style=discord.ButtonStyle.secondary,
-        custom_id="hll_tk_watch:warn",
+        custom_id="hll_tk_watch:forgive",
     )
-    async def warn(
+    async def forgive(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ) -> None:
-        await self.module.handle_action(interaction, "warn")
+        await self.module.handle_action(interaction, "forgive")
 
     @discord.ui.button(
         label="Warn & Watch",
@@ -134,17 +143,14 @@ class HLLTKWatchActionView(discord.ui.View):
     ) -> None:
         await self.module.handle_action(interaction, "kick")
 
-    def disable(self) -> None:
-        for child in self.children:
-            if hasattr(child, "disabled"):
-                child.disabled = True
-
 
 class HLLTKWatchModule:
     """Track team-kill bursts and coordinate Discord/RCON moderation actions."""
 
     WINDOW_SECONDS = 60
     ACTION_WINDOW_SECONDS = 15 * 60
+    DEFAULT_ACTION_SECONDS = 5 * 60
+    MAX_TIMER_ACTIONS_PER_PASS = 20
     WORKER_INTERVAL_SECONDS = 1
     CLEANUP_INTERVAL_SECONDS = 30
     MAX_QUEUE_SIZE = 500
@@ -161,6 +167,7 @@ class HLLTKWatchModule:
     _EMPTY_SETTINGS: ClassVar[dict[str, Any]] = {
         "enabled": False,
         "channel_id": None,
+        "role_id": None,
         "threshold_per_min": 3,
         "watch_duration_minutes": 15,
         "exclude_commander": True,
@@ -184,6 +191,8 @@ class HLLTKWatchModule:
         self._watch_failure_notified: set[tuple[int, str]] = set()
         self._next_cleanup_at = 0.0
         self._registered_views: dict[int, HLLTKWatchActionView] = {}
+        self._timer_failures: dict[int, int] = {}
+        self._next_timer_at: dict[int, float] = {}
 
     def register_config(self) -> None:
         self.cog.config.register_guild(hll_tk_watch=dict(self._EMPTY_SETTINGS))
@@ -193,9 +202,9 @@ class HLLTKWatchModule:
         now = int(discord.utils.utcnow().timestamp())
         for alerts in self._alerts.values():
             for alert in alerts.values():
-                if alert.status != "active" or alert.expires_at <= now:
+                if alert.status not in {"active", "watching"} or alert.expires_at <= now:
                     continue
-                view = HLLTKWatchActionView(self)
+                view = HLLTKWatchActionView(self, watching=alert.status == "watching")
                 self.cog.bot.add_view(view, message_id=alert.message_id)
                 self._registered_views[alert.message_id] = view
         if not self.worker.is_running():
@@ -203,9 +212,8 @@ class HLLTKWatchModule:
 
     def stop(self) -> None:
         self.worker.cancel()
-        if hasattr(self.cog.bot, "remove_view"):
-            for view in self._registered_views.values():
-                self.cog.bot.remove_view(view)
+        for view in self._registered_views.values():
+            view.stop()
         self._registered_views.clear()
         self._enabled_guilds.clear()
         self._queues.clear()
@@ -219,6 +227,8 @@ class HLLTKWatchModule:
         self._failure_counts.clear()
         self._next_process_at.clear()
         self._watch_failure_notified.clear()
+        self._timer_failures.clear()
+        self._next_timer_at.clear()
 
     def should_poll(self, guild_id: int) -> bool:
         return guild_id in self._enabled_guilds
@@ -226,6 +236,32 @@ class HLLTKWatchModule:
     async def get_settings(self, guild: discord.Guild) -> dict[str, Any]:
         stored = await self.cog.config.guild(guild).hll_tk_watch()
         return self._normalize_settings(stored)
+
+    async def delete_user_data(self, user_id: int) -> None:
+        """Remove stored staff identity from temporary moderation decisions."""
+        mentions = (f"<@{user_id}>", f"<@!{user_id}>")
+        for guild_id in await self.cog.config.all_guilds():
+            guild_id = int(guild_id)
+            async with self._guild_lock(guild_id):
+                value = self.cog.config.guild_from_id(guild_id).hll_tk_watch
+                settings = self._normalize_settings(await value())
+                changed = False
+                for raw in settings["active_alerts"].values():
+                    if not isinstance(raw, dict):
+                        continue
+                    decision = str(raw.get("decision", ""))
+                    for mention in mentions:
+                        decision = decision.replace(mention, "a deleted administrator")
+                    if decision != raw.get("decision", ""):
+                        raw["decision"] = decision
+                        changed = True
+                for message_id, alert in list(self._alerts.get(guild_id, {}).items()):
+                    decision = alert.decision
+                    for mention in mentions:
+                        decision = decision.replace(mention, "a deleted administrator")
+                    self._alerts[guild_id][message_id] = replace(alert, decision=decision)
+                if changed:
+                    await value.set(settings)
 
     async def configure(
         self,
@@ -235,6 +271,7 @@ class HLLTKWatchModule:
         threshold_per_min: int,
         watch_duration_minutes: int,
         exclude_commander: bool,
+        role_id: int | None = None,
     ) -> None:
         async with self._guild_lock(guild.id):
             settings = await self.get_settings(guild)
@@ -245,6 +282,7 @@ class HLLTKWatchModule:
                     "threshold_per_min": threshold_per_min,
                     "watch_duration_minutes": watch_duration_minutes,
                     "exclude_commander": exclude_commander,
+                    "role_id": role_id,
                 }
             )
             self._write_runtime_state(guild.id, settings)
@@ -268,7 +306,12 @@ class HLLTKWatchModule:
             self._alerts.pop(guild.id, None)
             self._open_alert_players.pop(guild.id, None)
         for alert in alerts:
-            await self._delete_alert_message(guild, alert)
+            async with self._alert_lock(alert.message_id):
+                self._timer_failures.pop(alert.message_id, None)
+                self._next_timer_at.pop(alert.message_id, None)
+                await self._edit_alert_message(
+                    guild, replace(alert, status="resolved", decision="TK watch disabled")
+                )
 
     async def ingest_admin_logs(
         self,
@@ -302,6 +345,7 @@ class HLLTKWatchModule:
     async def worker(self) -> None:
         try:
             await self._process_all_guilds()
+            await self._process_alert_timers()
             now = time.monotonic()
             if now >= self._next_cleanup_at:
                 self._next_cleanup_at = now + self.CLEANUP_INTERVAL_SECONDS
@@ -372,6 +416,8 @@ class HLLTKWatchModule:
 
         watch = self._active_watch(guild.id, event.eos_id)
         if watch is not None:
+            if event.occurred_at.timestamp() < watch.starts_at:
+                return
             if settings["exclude_commander"]:
                 role = await self._get_role(guild, event.eos_id)
                 if role is None:
@@ -418,6 +464,7 @@ class HLLTKWatchModule:
             role_name=role_name,
             commander_included=is_commander and not settings["exclude_commander"],
             channel_id=settings["channel_id"],
+            role_id=settings["role_id"],
         )
         self._clear_window(guild.id, event.eos_id)
 
@@ -432,6 +479,7 @@ class HLLTKWatchModule:
         role_name: str,
         commander_included: bool,
         channel_id: int | None,
+        role_id: int | None = None,
     ) -> None:
         channel = (
             guild.get_channel_or_thread(channel_id)
@@ -442,14 +490,21 @@ class HLLTKWatchModule:
             raise HLLTKWatchChannelUnavailable
 
         expires_at = int((discord.utils.utcnow() + timedelta(seconds=self.ACTION_WINDOW_SECONDS)).timestamp())
+        default_action_at = expires_at - self.ACTION_WINDOW_SECONDS + self.DEFAULT_ACTION_SECONDS
         embed = discord.Embed(
             title="HLL VN Team-Kill Threshold",
             description=(
                 f"This player reached **{count} team kills in a rolling minute**. "
-                f"Choose an action before <t:{expires_at}:R>."
+                f"Automatic Warn & Watch begins <t:{default_action_at}:R> unless staff decide. "
+                f"Forgive is available until <t:{expires_at}:R>."
             ),
             color=discord.Color.orange(),
             timestamp=event.occurred_at,
+        )
+        embed.add_field(
+            name="Automatic warning",
+            value="Pending delivery to the player.",
+            inline=False,
         )
         embed.add_field(
             name="Player",
@@ -488,12 +543,18 @@ class HLLTKWatchModule:
             ),
             inline=False,
         )
-        embed.set_footer(text="The buttons and this message expire after 15 minutes.")
+        embed.set_footer(text="Buttons expire after 15 minutes. This alert is kept as a record.")
         view = HLLTKWatchActionView(self)
+        role = guild.get_role(role_id) if role_id is not None else None
         message = await channel.send(
+            content=role.mention if role is not None and not role.is_default() else None,
             embed=embed,
             view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
+            allowed_mentions=discord.AllowedMentions(
+                everyone=False, users=False,
+                roles=[role] if role is not None and not role.is_default() else False,
+                replied_user=False,
+            ),
         )
         self._registered_views[message.id] = view
 
@@ -505,6 +566,7 @@ class HLLTKWatchModule:
             threshold_count=count,
             watch_duration_minutes=watch_duration_minutes,
             expires_at=expires_at,
+            default_action_at=default_action_at,
         )
         stored = False
         async with self._guild_lock(guild.id):
@@ -514,11 +576,11 @@ class HLLTKWatchModule:
                 await self._persist_runtime_state(guild)
                 stored = True
         if not stored:
-            try:
-                await message.delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
-            self._unregister_view(message.id)
+            await self._edit_alert_message(
+                guild, replace(record, status="resolved", decision="TK watch disabled"), message
+            )
+        else:
+            await self._process_alert_timer(guild, record)
 
     async def handle_action(
         self,
@@ -548,46 +610,27 @@ class HLLTKWatchModule:
                     await self._expire_alert_while_locked(guild, record)
                 await interaction.followup.send("This team-kill action window has expired.")
                 return
-            if record.status != "active":
+            if record.status not in {"active", "watching"}:
                 await interaction.followup.send("Another administrator already handled this alert.")
+                return
+            if action == "warn_watch" and record.status == "watching":
+                await interaction.followup.send("This player is already watched. You can still forgive or kick them.")
                 return
             if not self.should_poll(guild.id):
                 await self._expire_alert_while_locked(guild, record)
                 await interaction.followup.send("Team-kill watch is disabled for this server.")
                 return
 
-            processing = await self._set_alert_status(guild, record, "processing")
-            if processing is None:
-                await interaction.followup.send("Team-kill watch is disabled for this server.")
-                return
             try:
-                if action in {"warn", "warn_watch"}:
-                    await self.cog.kill_feed.execute_rcon(
-                        guild,
-                        "MessagePlayer TK warning",
-                        lambda client: client.message_player(
-                            record.eos_id,
-                            self.WARNING_MESSAGE,
-                        ),
-                    )
-                else:
-                    await self.cog.kill_feed.execute_rcon(
-                        guild,
-                        "KickPlayer TK action",
-                        lambda client: client.kick_player(
-                            record.eos_id,
-                            self.MANUAL_KICK_REASON,
-                        ),
-                    )
+                updated = await self._perform_action(
+                    guild, record, action, actor=interaction.user.mention
+                )
             except asyncio.CancelledError:
-                await self._set_alert_status(guild, record, "active")
                 raise
             except (ValueError, KillFeedConnectionTestError) as exc:
-                await self._set_alert_status(guild, record, "active")
                 await interaction.followup.send(str(exc))
                 return
             except Exception:
-                await self._set_alert_status(guild, record, "active")
                 log.exception(
                     "Unexpected HLL TK-watch button failure for guild %s",
                     guild.id,
@@ -597,53 +640,160 @@ class HLLTKWatchModule:
                 )
                 return
 
-            watch: HLLTKWatchRecord | None = None
-            if action == "warn_watch":
-                watch = HLLTKWatchRecord(
-                    eos_id=record.eos_id,
-                    player_name=record.player_name,
-                    expires_at=int(
-                        (
-                            discord.utils.utcnow()
-                            + timedelta(minutes=record.watch_duration_minutes)
-                        ).timestamp()
-                    ),
-                )
-            labels = {
-                "warn": "Warned",
-                "warn_watch": f"Warned and watched for {record.watch_duration_minutes} minute(s)",
-                "kick": "Kicked",
-            }
-            resolved: HLLTKAlertRecord | None = None
-            async with self._guild_lock(guild.id):
-                current = self._alerts.setdefault(guild.id, {}).get(record.message_id)
-                if self.should_poll(guild.id) and current is not None:
-                    if watch is not None:
-                        self._watches.setdefault(guild.id, {})[record.eos_id] = watch
-                    elif action == "kick":
-                        self._watches.setdefault(guild.id, {}).pop(record.eos_id, None)
-                        self._watch_failure_notified.discard((guild.id, record.eos_id))
-                    resolved = HLLTKAlertRecord(
-                        message_id=record.message_id,
-                        channel_id=record.channel_id,
-                        eos_id=record.eos_id,
-                        player_name=record.player_name,
-                        threshold_count=record.threshold_count,
-                        watch_duration_minutes=record.watch_duration_minutes,
-                        expires_at=record.expires_at,
-                        status="resolved",
-                    )
-                    self._alerts[guild.id][record.message_id] = resolved
-                    self._open_alert_players.setdefault(guild.id, set()).discard(record.eos_id)
-                    await self._persist_runtime_state(guild)
-            if resolved is None:
+            if updated is None:
                 await interaction.followup.send(
-                    "The RCON action completed, but team-kill watch was disabled while it "
-                    "was running. No new watch was stored."
+                    "This alert is no longer available for that action."
                 )
                 return
-            await self._edit_resolved_message(message, resolved, labels[action], interaction.user)
-            await interaction.followup.send(f"Action completed: **{labels[action]}**.")
+            await self._edit_alert_message(guild, updated, message)
+            await interaction.followup.send(f"Action completed: {updated.decision}")
+
+    async def _perform_action(
+        self,
+        guild: discord.Guild,
+        record: HLLTKAlertRecord,
+        action: TKAction,
+        *,
+        actor: str = "Automatic five-minute default",
+        automatic: bool = False,
+    ) -> HLLTKAlertRecord | None:
+        # Serialize watch changes and watched-player kicks against forgiveness.
+        async with self._guild_lock(guild.id):
+            current = self._alerts.get(guild.id, {}).get(record.message_id)
+            if (
+                not self.should_poll(guild.id)
+                or current is None
+                or current.status not in {"active", "watching"}
+                or (action == "warn_watch" and current.status == "watching")
+            ):
+                return None
+            now = int(discord.utils.utcnow().timestamp())
+            if not automatic and current.expires_at <= now:
+                return None
+            excluded_commander = False
+            if not automatic and action in {"warn_watch", "kick"}:
+                settings = await self.get_settings(guild)
+                if settings["exclude_commander"]:
+                    role = await self._get_role(guild, current.eos_id)
+                    if role is None:
+                        raise ValueError(
+                            "Cannot verify the player's role. No TK action was taken; retry when RCON is available."
+                        )
+                    excluded_commander = role[0]
+                    if excluded_commander:
+                        action = "forgive"
+            watches = self._watches.setdefault(guild.id, {})
+            if action == "forgive":
+                watches.pop(current.eos_id, None)
+                label = "Commander excluded; watch cancelled" if excluded_commander else "Forgiven; watch cancelled"
+            elif action == "warn_watch":
+                await self._warn_player(guild, current.eos_id)
+                started_at = discord.utils.utcnow().timestamp()
+                watches[current.eos_id] = HLLTKWatchRecord(
+                    eos_id=current.eos_id,
+                    player_name=current.player_name,
+                    starts_at=started_at,
+                    expires_at=int(started_at) + current.watch_duration_minutes * 60,
+                )
+                label = f"Warned and watched for {current.watch_duration_minutes} minute(s)"
+            elif action == "kick":
+                await self.cog.kill_feed.execute_rcon(
+                    guild, "KickPlayer TK action",
+                    lambda client: client.kick_player(current.eos_id, self.MANUAL_KICK_REASON),
+                )
+                watches.pop(current.eos_id, None)
+                label = "Kicked"
+            else:
+                raise ValueError("Unknown team-kill action.")
+            updated = replace(
+                current,
+                status="watching" if action == "warn_watch" else "resolved",
+                warning_sent=current.warning_sent or action == "warn_watch",
+                decision=f"{label} by {actor}",
+            )
+            self._alerts[guild.id][current.message_id] = updated
+            self._watch_failure_notified.discard((guild.id, current.eos_id))
+            if updated.status == "resolved":
+                self._open_alert_players.setdefault(guild.id, set()).discard(current.eos_id)
+                self._clear_window(guild.id, current.eos_id)
+            await self._persist_runtime_state(guild)
+            return updated
+
+    async def _warn_player(self, guild: discord.Guild, eos_id: str) -> None:
+        await self.cog.kill_feed.execute_rcon(
+            guild, "MessagePlayer TK warning",
+            lambda client: client.message_player(eos_id, self.WARNING_MESSAGE),
+        )
+
+    async def _process_alert_timers(self) -> None:
+        actions = 0
+        for guild in self.cog.bot.guilds:
+            if not self.should_poll(guild.id):
+                continue
+            for record in list(self._alerts.get(guild.id, {}).values()):
+                if record.status != "active":
+                    continue
+                if time.monotonic() < self._next_timer_at.get(record.message_id, 0):
+                    continue
+                now = int(discord.utils.utcnow().timestamp())
+                if record.warning_sent and now < record.default_action_at:
+                    continue
+                if actions >= self.MAX_TIMER_ACTIONS_PER_PASS:
+                    return
+                actions += 1
+                await self._process_alert_timer(guild, record)
+
+    async def _process_alert_timer(self, guild: discord.Guild, record: HLLTKAlertRecord) -> None:
+        async with self._alert_lock(record.message_id):
+            current = self._alerts.get(guild.id, {}).get(record.message_id)
+            if current is None or current.status != "active" or not self.should_poll(guild.id):
+                return
+            try:
+                settings = await self.get_settings(guild)
+                role = await self._get_role(guild, current.eos_id) if settings["exclude_commander"] else (False, "")
+                if role is None:
+                    raise RuntimeError("Could not verify commander status")
+                if role[0]:
+                    async with self._guild_lock(guild.id):
+                        latest = self._alerts.get(guild.id, {}).get(current.message_id)
+                        if latest is None or latest.status != "active" or not self.should_poll(guild.id):
+                            return
+                        current = replace(latest, status="resolved", decision="Commander excluded")
+                        self._alerts[guild.id][current.message_id] = current
+                        self._open_alert_players.setdefault(guild.id, set()).discard(current.eos_id)
+                        await self._persist_runtime_state(guild)
+                elif int(discord.utils.utcnow().timestamp()) >= current.default_action_at:
+                    current = await self._perform_action(guild, current, "warn_watch", automatic=True)
+                else:
+                    current = await self._deliver_initial_warning(guild, current)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                failures = self._timer_failures.get(record.message_id, 0) + 1
+                self._timer_failures[record.message_id] = failures
+                self._next_timer_at[record.message_id] = time.monotonic() + min(
+                    self.MAX_RETRY_SECONDS, 2 ** min(failures, 6)
+                )
+                log.warning("TK warning/watch failed for alert %s; retrying: %s", record.message_id, exc)
+                return
+            self._timer_failures.pop(record.message_id, None)
+            self._next_timer_at.pop(record.message_id, None)
+            if current is not None:
+                await self._edit_alert_message(guild, current)
+
+    async def _deliver_initial_warning(
+        self, guild: discord.Guild, record: HLLTKAlertRecord
+    ) -> HLLTKAlertRecord | None:
+        async with self._guild_lock(guild.id):
+            current = self._alerts.get(guild.id, {}).get(record.message_id)
+            if not self.should_poll(guild.id) or current is None or current.status != "active":
+                return None
+            if not current.warning_sent:
+                await self._warn_player(guild, current.eos_id)
+                current = replace(current, warning_sent=True)
+                self._alerts[guild.id][current.message_id] = current
+                await self._persist_runtime_state(guild)
+            return current
 
     async def _kick_watched_player(
         self,
@@ -652,43 +802,47 @@ class HLLTKWatchModule:
         watch: HLLTKWatchRecord,
         settings: Mapping[str, Any],
     ) -> None:
-        try:
-            await self.cog.kill_feed.execute_rcon(
-                guild,
-                "KickPlayer automatic TK watch",
-                lambda client: client.kick_player(event.eos_id, self.WATCH_KICK_REASON),
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - retain the watch for a later retry
-            log.warning(
-                "Automatic TK-watch kick failed for player %s in guild %s: %s",
-                event.eos_id,
-                guild.id,
-                exc,
-                exc_info=True,
-            )
-            key = (guild.id, event.eos_id)
-            if key not in self._watch_failure_notified:
-                self._watch_failure_notified.add(key)
-                await self._send_watch_result(
-                    guild,
-                    event,
-                    settings.get("channel_id"),
-                    success=False,
-                )
-            return
-
+        changed_alerts = []
+        success = False
+        notify = False
         async with self._guild_lock(guild.id):
-            self._watches.setdefault(guild.id, {}).pop(event.eos_id, None)
-            self._watch_failure_notified.discard((guild.id, event.eos_id))
-            await self._persist_runtime_state(guild)
-        await self._send_watch_result(
-            guild,
-            event,
-            settings.get("channel_id"),
-            success=True,
-        )
+            if (
+                not self.should_poll(guild.id)
+                or self._active_watch(guild.id, event.eos_id) != watch
+                or event.occurred_at.timestamp() < watch.starts_at
+            ):
+                return
+            try:
+                await self.cog.kill_feed.execute_rcon(
+                    guild, "KickPlayer automatic TK watch",
+                    lambda client: client.kick_player(event.eos_id, self.WATCH_KICK_REASON),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("Automatic TK-watch kick failed for %s in guild %s: %s", event.eos_id, guild.id, exc)
+                key = (guild.id, event.eos_id)
+                if key not in self._watch_failure_notified:
+                    self._watch_failure_notified.add(key)
+                    notify = True
+            else:
+                success = notify = True
+                self._watches.setdefault(guild.id, {}).pop(event.eos_id, None)
+                self._watch_failure_notified.discard((guild.id, event.eos_id))
+                for message_id, alert in list(self._alerts.get(guild.id, {}).items()):
+                    if alert.eos_id == event.eos_id and alert.status in {"active", "watching"}:
+                        updated = replace(alert, status="resolved", decision="Automatically kicked for a team kill while watched")
+                        self._alerts[guild.id][message_id] = updated
+                        changed_alerts.append(updated)
+                self._open_alert_players.setdefault(guild.id, set()).discard(event.eos_id)
+                await self._persist_runtime_state(guild)
+        for alert in changed_alerts:
+            async with self._alert_lock(alert.message_id):
+                current = self._alerts.get(guild.id, {}).get(alert.message_id)
+                if current is not None:
+                    await self._edit_alert_message(guild, current)
+        if notify:
+            await self._send_watch_result(guild, event, settings.get("channel_id"), success=success)
 
     async def _send_watch_result(
         self,
@@ -798,99 +952,82 @@ class HLLTKWatchModule:
         record: HLLTKAlertRecord,
     ) -> None:
         """Expire an alert while its message-specific lock is already held."""
-        await self._delete_alert_message(guild, record)
+        current = self._alerts.get(guild.id, {}).get(record.message_id)
+        if current is None:
+            return
+        if not await self._edit_alert_message(guild, current):
+            return
         async with self._guild_lock(guild.id):
             current = self._alerts.setdefault(guild.id, {}).get(record.message_id)
             if current is None:
                 return
+            if current.status == "active" and self.should_poll(guild.id):
+                # A failed default action still needs its durable retry record.
+                return
             self._alerts[guild.id].pop(record.message_id, None)
-            self._open_alert_players.setdefault(guild.id, set()).discard(
-                current.eos_id
-            )
+            if not any(
+                alert.eos_id == current.eos_id and alert.status in {"active", "watching"}
+                for alert in self._alerts[guild.id].values()
+            ):
+                self._open_alert_players.setdefault(guild.id, set()).discard(current.eos_id)
             await self._persist_runtime_state(guild)
+            self._timer_failures.pop(record.message_id, None)
+            self._next_timer_at.pop(record.message_id, None)
 
-    async def _delete_alert_message(
+    async def _edit_alert_message(
         self,
         guild: discord.Guild,
         record: HLLTKAlertRecord,
-    ) -> None:
-        channel = guild.get_channel_or_thread(record.channel_id)
-        if channel is None or not hasattr(channel, "get_partial_message"):
-            self._unregister_view(record.message_id)
-            return
+        message: discord.Message | None = None,
+    ) -> bool:
+        view = None
         try:
-            await channel.get_partial_message(record.message_id).delete()
-        except discord.NotFound:
-            return
-        except (discord.Forbidden, discord.HTTPException) as exc:
-            log.warning(
-                "Could not delete expired HLL TK-watch alert %s in guild %s: %s",
-                record.message_id,
-                guild.id,
-                exc,
+            if message is None:
+                channel = guild.get_channel_or_thread(record.channel_id)
+                if channel is None or not hasattr(channel, "get_partial_message"):
+                    self._unregister_view(record.message_id)
+                    return True
+                message = await channel.get_partial_message(record.message_id).fetch()
+            embed = message.embeds[0].copy() if message.embeds else discord.Embed()
+            if record.status == "resolved":
+                embed.color = discord.Color.green()
+            fields = {
+                "Automatic warning": "Sent to the player." if record.warning_sent else "Delivery pending or cancelled.",
+                "Decision": record.decision or "Awaiting an administrator or the five-minute default.",
+            }
+            for name, value in fields.items():
+                index = next((i for i, field in enumerate(embed.fields) if field.name == name), None)
+                if index is None:
+                    embed.add_field(name=name, value=value, inline=False)
+                else:
+                    embed.set_field_at(index, name=name, value=value, inline=False)
+            expired = record.expires_at <= int(discord.utils.utcnow().timestamp())
+            view = None if expired or record.status == "resolved" else HLLTKWatchActionView(
+                self, watching=record.status == "watching"
             )
-        finally:
+            embed.set_footer(text=(
+                "Action window closed. This alert is kept as a record."
+                if view is None else "Forgive is available for 15 minutes. This alert is kept as a record."
+            ))
+            # Stop the previous view before Discord registers its replacement.
             self._unregister_view(record.message_id)
-
-    async def _set_alert_status(
-        self,
-        guild: discord.Guild,
-        record: HLLTKAlertRecord,
-        status: str,
-    ) -> HLLTKAlertRecord | None:
-        updated = HLLTKAlertRecord(
-            message_id=record.message_id,
-            channel_id=record.channel_id,
-            eos_id=record.eos_id,
-            player_name=record.player_name,
-            threshold_count=record.threshold_count,
-            watch_duration_minutes=record.watch_duration_minutes,
-            expires_at=record.expires_at,
-            status=status,
-        )
-        async with self._guild_lock(guild.id):
-            alerts = self._alerts.setdefault(guild.id, {})
-            if not self.should_poll(guild.id) or record.message_id not in alerts:
-                return None
-            alerts[record.message_id] = updated
-            players = self._open_alert_players.setdefault(guild.id, set())
-            if status == "active":
-                players.add(record.eos_id)
-            elif status == "resolved":
-                players.discard(record.eos_id)
-            await self._persist_runtime_state(guild)
-        return updated
-
-    async def _edit_resolved_message(
-        self,
-        message: discord.Message,
-        record: HLLTKAlertRecord,
-        action_label: str,
-        actor: discord.abc.User,
-    ) -> None:
-        embed = message.embeds[0].copy() if message.embeds else discord.Embed()
-        embed.color = discord.Color.green()
-        embed.add_field(
-            name="Staff action",
-            value=f"{action_label} by {actor.mention}",
-            inline=False,
-        )
-        embed.set_footer(
-            text="Handled. This message will still be deleted at the end of its 15-minute window."
-        )
-        view = HLLTKWatchActionView(self)
-        view.disable()
-        try:
             await message.edit(
                 embed=embed,
                 view=view,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
-        except discord.HTTPException:
-            log.exception("Could not update resolved HLL TK-watch alert %s", record.message_id)
-        else:
+        except discord.NotFound:
             self._unregister_view(record.message_id)
-            self._registered_views[record.message_id] = view
+        except discord.HTTPException:
+            log.exception("Could not update HLL TK-watch alert %s", record.message_id)
+            if view is not None:
+                self.cog.bot.add_view(view, message_id=record.message_id)
+                self._registered_views[record.message_id] = view
+            return False
+        else:
+            if view is not None:
+                self._registered_views[record.message_id] = view
+        return True
 
     async def _load_state(self) -> None:
         now = int(discord.utils.utcnow().timestamp())
@@ -912,7 +1049,7 @@ class HLLTKWatchModule:
             self._open_alert_players[guild_id] = {
                 alert.eos_id
                 for alert in alerts.values()
-                if alert.status == "active" and alert.expires_at > now
+                if alert.status in {"active", "watching"}
             }
             settings["active_watches"] = {
                 eos_id: watch.to_config() for eos_id, watch in watches.items()
@@ -952,6 +1089,7 @@ class HLLTKWatchModule:
         return {
             "enabled": bool(value.get("enabled", False)),
             "channel_id": channel_id,
+            "role_id": cls._optional_id(value.get("role_id")),
             "threshold_per_min": threshold,
             "watch_duration_minutes": watch_duration,
             "exclude_commander": bool(value.get("exclude_commander", True)),
@@ -979,10 +1117,15 @@ class HLLTKWatchModule:
             expires_at = cls._optional_int(raw.get("expires_at"))
             if not eos_id or expires_at is None or expires_at <= now:
                 continue
+            try:
+                starts_at = float(raw.get("starts_at", 0))
+            except (TypeError, ValueError, OverflowError):
+                starts_at = 0.0
             parsed[eos_id] = HLLTKWatchRecord(
                 eos_id=eos_id,
                 player_name=cls._safe_plain_text(raw.get("player_name", "Unknown"), 100),
                 expires_at=expires_at,
+                starts_at=starts_at,
             )
         return parsed
 
@@ -1003,7 +1146,7 @@ class HLLTKWatchModule:
             status = str(raw.get("status", "active"))
             if status == "processing":
                 status = "active"
-            if status not in {"active", "resolved"}:
+            if status not in {"active", "watching", "resolved"}:
                 status = "active"
             parsed[message_id] = HLLTKAlertRecord(
                 message_id=message_id,
@@ -1019,6 +1162,10 @@ class HLLTKWatchModule:
                 ),
                 expires_at=expires_at,
                 status=status,
+                default_action_at=cls._optional_int(raw.get("default_action_at"))
+                or expires_at - cls.ACTION_WINDOW_SECONDS + cls.DEFAULT_ACTION_SECONDS,
+                warning_sent=bool(raw.get("warning_sent", False)),
+                decision=cls._safe_plain_text(raw.get("decision", ""), 1000),
             )
         return parsed
 
@@ -1092,8 +1239,8 @@ class HLLTKWatchModule:
 
     def _unregister_view(self, message_id: int) -> None:
         view = self._registered_views.pop(message_id, None)
-        if view is not None and hasattr(self.cog.bot, "remove_view"):
-            self.cog.bot.remove_view(view)
+        if view is not None:
+            view.stop()
 
     @staticmethod
     def _safe_plain_text(value: object, limit: int) -> str:
@@ -1150,6 +1297,7 @@ class HLLTKWatchCommandsMixin:
         threshold_per_min="Team kills in a rolling minute that trigger an alert.",
         watch_duration="Minutes to watch a player after Warn & Watch (1-90).",
         exclude_commander="Ignore players whose current in-game role is Commander.",
+        role="Role to ping for each threshold alert; omit for no role ping.",
     )
     @app_commands.choices(
         toggle=[
@@ -1166,6 +1314,7 @@ class HLLTKWatchCommandsMixin:
         threshold_per_min: app_commands.Range[int, 1, 100] = 3,
         watch_duration: app_commands.Range[int, 1, 90] = 15,
         exclude_commander: bool = True,
+        role: discord.Role | None = None,
     ) -> None:
         if not await self.is_authorized(interaction.user):
             await interaction.response.send_message(
@@ -1197,12 +1346,21 @@ class HLLTKWatchCommandsMixin:
             await interaction.followup.send("Choose a text channel when enabling TK watch.")
             return
 
+        if role is not None and (role.guild.id != guild.id or role.is_default()):
+            await interaction.followup.send("Choose a role in this server other than @everyone.")
+            return
+
         bot_member = guild.me
         if bot_member is not None:
             permissions = channel.permissions_for(bot_member)
             if not permissions.send_messages or not permissions.embed_links:
                 await interaction.followup.send(
                     "I need permission to send messages and embeds in that channel."
+                )
+                return
+            if role is not None and not role.mentionable and not permissions.mention_everyone:
+                await interaction.followup.send(
+                    "Make that role mentionable or give me permission to mention roles in the alert channel."
                 )
                 return
 
@@ -1225,12 +1383,18 @@ class HLLTKWatchCommandsMixin:
             threshold_per_min=int(threshold_per_min),
             watch_duration_minutes=int(watch_duration),
             exclude_commander=exclude_commander,
+            role_id=role.id if role is not None else None,
         )
         embed = discord.Embed(
             title="HLL VN Team-Kill Watch",
             description=f"Team-kill alerts will be sent to {channel.mention}.",
             color=discord.Color.green(),
             timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(
+            name="Role ping",
+            value=role.mention if role is not None else "None",
+            inline=True,
         )
         embed.add_field(
             name="Threshold",
@@ -1247,7 +1411,7 @@ class HLLTKWatchCommandsMixin:
             value="Ignored" if exclude_commander else "Included and identified in alerts",
             inline=True,
         )
-        embed.set_footer(text="Alert buttons and messages expire after 15 minutes.")
+        embed.set_footer(text="Automatic warning at threshold; Warn & Watch after 5 minutes; Forgive within 15 minutes.")
         await interaction.followup.send(
             embed=embed,
             allowed_mentions=discord.AllowedMentions.none(),

@@ -54,7 +54,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.10.3"
+    __version__ = "1.11.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -136,6 +136,7 @@ class BattleMetric(
         await self.hll_database.delete_user_data(user_id)
         await self.hll_vip.delete_user_data(user_id)
         await self.dog_tags.delete_user_data(user_id)
+        await self.tk_watch.delete_user_data(user_id)
         for guild_id, guild_data in (await self.config.all_guilds()).items():
             authorized_user_ids = guild_data.get("authorized_user_ids", [])
             if user_id not in authorized_user_ids:
