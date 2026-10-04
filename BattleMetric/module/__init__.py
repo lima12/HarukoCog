@@ -4,6 +4,7 @@ from .admin_ping import HLLAdminPingCommandsMixin, HLLAdminPingModule
 from .dog_tags import DogTagCommandsMixin, DogTagModule
 from .hll_ban import HLLBanCommandsMixin, HLLBanModule
 from .hll_database import HLLDatabaseCommandsMixin, HLLDatabaseModule
+from .hll_maps import HLLMapCommandsMixin, HLLMapModule
 from .hll_messaging import HLLMessagingCommandsMixin, HLLMessagingModule
 from .hll_tk_watch import HLLTKWatchCommandsMixin, HLLTKWatchModule
 from .hll_vip import HLLVIPCommandsMixin, HLLVIPModule
@@ -21,6 +22,8 @@ __all__ = (
     "HLLBanModule",
     "HLLDatabaseCommandsMixin",
     "HLLDatabaseModule",
+    "HLLMapCommandsMixin",
+    "HLLMapModule",
     "HLLMessagingCommandsMixin",
     "HLLMessagingModule",
     "HLLSeedingCommandsMixin",

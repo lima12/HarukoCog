@@ -42,6 +42,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn mesg target:@member mesgs:MESSAGE` - Authorized member. Send a private in-game popup to a linked member.
 - `/hllvn mesg target:EOS_ID mesgs:MESSAGE` - Authorized member. Send a private in-game popup directly by game account ID.
 - `/hllvn mesg target:ALL mesgs:MESSAGE` - Authorized member. Send an in-game popup to every connected player.
+- `/hllvn changemap map_name:<map>` - Authorized member. Submit a map change immediately using a specific map/mode or exact server map ID; the game server's countdown still applies.
 - `/hllvn giveseedvip duration:2d` - Authorized member. Reward players currently on the game server with timed VIP and a private in-game popup.
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
@@ -356,6 +357,39 @@ The confirmation embed shows the target, game account ID when applicable, and
 message text so other administrators can see what was sent. Anyone with access
 to that channel can see the reply. Authorization denials remain private, and
 the confirmation does not ping the target or mentions in the message.
+
+## Authorized Map Changes
+
+```text
+/hllvn changemap map_name:Cam Ranh Port Warfare
+/hllvn changemap map_name:wdeve_warfare_day
+```
+
+Only bot owners and members authorized through `[p]bm auth add` can use this
+command or its autocomplete. The check runs before defer, configuration, or
+RCON work. Select the map and mode from autocomplete, enter its full display
+name, or enter an exact map ID. A bare map name is accepted only if it matches
+one available server variant; ambiguous modes are never guessed.
+
+The stateless `module/hll_maps.py` service reads available maps through the
+shared, serialized HLL: Vietnam RCON client and validates the selection before
+submitting one `change_map` request. It needs the existing RCON endpoint and
+vault password, but not an enabled Discord kill feed. No map rotation settings
+are edited. Autocomplete reads the library's local Vietnam catalog without
+RCON/API requests; new maps missing from that catalog can still be selected by
+their exact server ID. A selection is always checked against the server's live
+map list when submitted.
+
+The request is submitted immediately without a confirmation button. However,
+the library's `ChangeMap` operation starts a server-side 60-second countdown,
+not a guaranteed zero-delay transition. The private confirmation reports an
+accepted request, not that the new map is already loaded. See the
+[hllrcon command implementation](https://github.com/timraay/hllrcon/blob/master/hllrcon/commands.py).
+If RCON loses the response, check the current or pending map before retrying;
+the bot does not blindly retry a potentially accepted change.
+
+After updating, run `[p]reload BattleMetric` and `[p]slash sync` to register
+`/hllvn changemap`. No new dependency or stored credential is required.
 
 ## Timed HLL VIPs
 

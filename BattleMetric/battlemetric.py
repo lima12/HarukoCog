@@ -16,6 +16,8 @@ from .module import (
     HLLBanModule,
     HLLDatabaseCommandsMixin,
     HLLDatabaseModule,
+    HLLMapCommandsMixin,
+    HLLMapModule,
     HLLMessagingCommandsMixin,
     HLLMessagingModule,
     HLLSeedingCommandsMixin,
@@ -46,6 +48,7 @@ class BattleMetric(
     HLLBanCommandsMixin,
     HLLMessagingCommandsMixin,
     HLLAdminPingCommandsMixin,
+    HLLMapCommandsMixin,
     HLLTKWatchCommandsMixin,
     HLLSeedingCommandsMixin,
     DogTagCommandsMixin,
@@ -54,7 +57,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.11.0"
+    __version__ = "1.12.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -81,6 +84,7 @@ class BattleMetric(
         self.hll_vip = HLLVIPModule(self)
         self.hll_ban = HLLBanModule(self)
         self.hll_messaging = HLLMessagingModule(self)
+        self.hll_maps = HLLMapModule(self)
         self.admin_ping = HLLAdminPingModule(self)
         self.tk_watch = HLLTKWatchModule(self)
         self.seeding = HLLSeedingModule(self)

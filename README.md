@@ -205,6 +205,19 @@ reuse the shared serialized HLL RCON client.
 The `/hllvn mesg` confirmation is public in the command channel and shows the
 target and message for other administrators. Authorization denials stay private.
 
+Authorized members can request a map change using a map/mode from autocomplete
+or an exact server map ID:
+
+```text
+/hllvn changemap map_name:Cam Ranh Port Warfare
+```
+
+The command validates against the live server map list and immediately submits
+one shared RCON request. The game server's 60-second countdown still applies;
+this does not guarantee a zero-delay transition. Autocomplete makes no RCON
+calls, and the confirmation is private. Reload BattleMetric and run
+`[p]slash sync` after updating to register the command.
+
 Authorized members can reward everyone currently on the game server with timed
 VIP and a private in-game thank-you popup:
 
