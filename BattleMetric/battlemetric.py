@@ -57,7 +57,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.12.0"
+    __version__ = "1.13.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -121,6 +121,7 @@ class BattleMetric(
         await self.kill_feed.start()
         await self.hll_vip.start()
         await self.admin_ping.start()
+        await self.hll_messaging.start()
         await self.tk_watch.start()
         await self.seeding.start()
         await self.dog_tags.start()
@@ -129,6 +130,7 @@ class BattleMetric(
         self.server_info.stop()
         self.hll_vip.stop()
         self.admin_ping.stop()
+        self.hll_messaging.stop()
         self.tk_watch.stop()
         self.seeding.stop()
         self.bot.loop.create_task(self.dog_tags.stop())
@@ -141,6 +143,7 @@ class BattleMetric(
         await self.hll_vip.delete_user_data(user_id)
         await self.dog_tags.delete_user_data(user_id)
         await self.tk_watch.delete_user_data(user_id)
+        await self.hll_messaging.delete_user_data(user_id)
         for guild_id, guild_data in (await self.config.all_guilds()).items():
             authorized_user_ids = guild_data.get("authorized_user_ids", [])
             if user_id not in authorized_user_ids:
@@ -148,6 +151,10 @@ class BattleMetric(
             await self.config.guild_from_id(guild_id).authorized_user_ids.set(
                 [member_id for member_id in authorized_user_ids if member_id != user_id]
             )
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        await self.hll_messaging.handle_admin_reply(message)
 
     async def get_api_token(self) -> Optional[str]:
         tokens = await self.bot.get_shared_api_tokens(self.API_SERVICE_NAME)

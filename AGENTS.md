@@ -216,7 +216,7 @@ cleanly if voice-channel chat is unavailable.
 ## Validation and handoff
 
 Run regressions with `python -m unittest discover -s tests -v`. Territory-protection
-tests are dependency-free; TK-watch and map-command tests need `discord.py` and
+tests are dependency-free; TK-watch, map-command, and admin-reply tests need `discord.py` and
 mock Red and RCON (they are skipped if Discord is unavailable). The map library
 contract check also needs `hllrcon`. There is no CI
 configuration, so validation must also be explicit and proportional to the change.

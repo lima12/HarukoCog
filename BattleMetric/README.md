@@ -358,6 +358,48 @@ message text so other administrators can see what was sent. Anyone with access
 to that channel can see the reply. Authorization denials remain private, and
 the confirmation does not ping the target or mentions in the message.
 
+### Reply Directly To An Admin Alert
+
+An authorized admin can use Discord's **Reply** on the bot's original `HLLVN SOS`
+embed and type a response, such as `We are checking your report now.` The text
+is sent as the same private in-game popup used by `/hllvn mesg`, targeting the
+alert's `EOS_Id`. The reporting player does not need a linked Discord account.
+The existing slash command remains available and unchanged.
+
+Native reply forwarding is active while `/hllvn adminping` is enabled and works
+only in its configured channel or thread. Only bot owners and members on the
+`[p]bm auth` list can forward replies; merely having the pinged staff role is not
+enough. Unauthorized replies are ignored without fetching messages or issuing
+RCON commands. The referenced message must be this bot's SOS alert in the same
+guild/channel, with a valid EOS ID. User/webhook copies, forwarded messages,
+other embeds, replies to confirmation messages, and `ALL` targets are ignored.
+
+Reply text is normalized to one line and limited to 1,000 characters. Attachments
+are not forwarded. Replies enter a bounded 100-message queue per guild, with at
+most one delivery every three seconds through the shared RCON client. Gateway
+duplicates are tracked in a bounded runtime cache. Authorization and the alert
+configuration are rechecked before delivery, so revocation or disabling/moving
+admin alerts prevents queued replies from being sent. The target is the guild's
+currently configured RCON server; no BattleMetrics or account-link lookup is
+needed for a reply.
+
+After successful delivery, the bot posts a public confirmation under the admin's
+reply, showing the player, EOS ID, administrator, and sent text. Mentions do not
+ping anyone. A failed RCON request gets an error instead of a success receipt and
+is not automatically retried, because a timeout may occur after the game has
+already shown the popup. Failure to post a Discord receipt never resends the
+game message. Check the game before retrying with a new reply. Editing an
+existing reply does not resend it. Pending replies and duplicate caches are
+runtime-only and cleared on reload; original SOS embeds can still be replied to
+after reload.
+
+The bot needs View Channel, Read Message History, Send Messages (or Send Messages
+in Threads), and Embed Links in the alert channel. Red must also be running with
+the Message Content intent enabled, including the toggle in the Discord
+Developer Portal. See the [Discord intent guide](https://discordpy.readthedocs.io/en/stable/intents.html#message-content).
+The cog does not change gateway intents itself. Run `[p]reload BattleMetric` to
+activate this feature; no new slash command or slash sync is required.
+
 ## Authorized Map Changes
 
 ```text
@@ -503,6 +545,11 @@ Unit chat. Discord receives an `HLLVN SOS` embed containing the player's in-game
 name, EOS ID, linked Discord account when available, and the supplied text. The
 configured role is the only mention Discord is allowed to notify; mentions
 placed in player names or report text cannot ping other users or roles.
+
+Authorized staff can also reply directly to the original SOS embed to send a
+private in-game response to its reporting player. See
+[Reply Directly To An Admin Alert](#reply-directly-to-an-admin-alert) for
+authorization, pacing, permissions, and delivery confirmations.
 
 Alerts use the existing shared three-second RCON admin-log poll. Overlapping log
 results are deduplicated, and alerts enter a bounded queue that sends at most

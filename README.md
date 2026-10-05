@@ -205,6 +205,18 @@ reuse the shared serialized HLL RCON client.
 The `/hllvn mesg` confirmation is public in the command channel and shows the
 target and message for other administrators. Authorization denials stay private.
 
+While `/hllvn adminping` is enabled, members authorized through `[p]bm auth` and
+bot owners can also use Discord's **Reply** on this bot's original `HLLVN SOS`
+alert. Their text is forwarded to the report's EOS ID as a private in-game popup,
+without requiring the player to link Discord. Replies are limited to 1,000
+characters and delivered at most once every three seconds per guild. The bot
+posts a public delivery confirmation for other admins, without pinging anyone.
+Only direct replies in the configured alert channel/thread are accepted; role
+membership alone does not authorize forwarding. The bot needs Message Content
+intent and Read Message History, alongside its normal send/embed permissions.
+See the [Discord intent guide](https://discordpy.readthedocs.io/en/stable/intents.html#message-content).
+Reload BattleMetric to enable the reply listener; no slash sync is needed.
+
 Authorized members can request a map change using a map/mode from autocomplete
 or an exact server map ID:
 

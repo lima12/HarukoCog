@@ -42,6 +42,8 @@ class HLLAdminPingModule:
     """Queue in-game admin requests and deliver controlled Discord role pings."""
 
     COMMAND = "!admin"
+    ALERT_TITLE = "HLLVN SOS"
+    EOS_FIELD_NAME = "EOS_Id"
     DELIVERY_INTERVAL_SECONDS = 3
     MAX_QUEUE_SIZE = 100
     MAX_SEEN_EVENTS = 2000
@@ -278,7 +280,7 @@ class HLLAdminPingModule:
         discord_value: str,
     ) -> discord.Embed:
         embed = discord.Embed(
-            title="HLLVN SOS",
+            title=cls.ALERT_TITLE,
             color=discord.Color.red(),
             timestamp=alert.occurred_at,
         )
@@ -287,7 +289,7 @@ class HLLAdminPingModule:
             value=cls._safe_embed_text(alert.player_name, 1024),
             inline=False,
         )
-        embed.add_field(name="EOS_Id", value=f"`{alert.eos_id}`", inline=False)
+        embed.add_field(name=cls.EOS_FIELD_NAME, value=f"`{alert.eos_id}`", inline=False)
         embed.add_field(name="Discord", value=discord_value, inline=False)
         embed.add_field(
             name="Text",
