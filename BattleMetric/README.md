@@ -618,10 +618,42 @@ RCON command path. Active Warn & Watch records and 15-minute action routing are
 stored in Red Config along with warning delivery state, five-minute default
 deadlines, role configuration, and decisions so they continue across reloads.
 Failed warning/default actions retry with exponential backoff up to 60 seconds
-without creating extra alerts or pretending a watch started. An overdue default
+without creating extra alerts or pretending a watch started, unless a fresh
+RCON player list confirms the target is offline. An overdue default
 is recovered when RCON becomes available, even if the button window has already
 closed; its watch starts on successful recovery. Rolling counters and
 deduplication caches are intentionally runtime-only.
+
+### Players Who Disconnect Before An Action
+
+If an initial warning, five-minute automatic Warn & Watch, or staff Warn & Watch
+or Kick action fails, the bot requests a fresh player list through the shared
+RCON client. This also covers failed commander-role verification after an alert
+was created. Only a successful, valid list without the target's exact EOS ID
+confirms absence. A timeout, connection failure, or malformed response does not
+prove the player left: the case stays pending, automatic actions retain their
+backoff, and staff can retry.
+
+When absence is confirmed, the action card is closed with
+`Closed - player disconnected before action`. Its buttons and automatic retries
+are removed, but the embed is retained as an orange audit record. Closure is not
+forgiveness and does not claim the warning or kick succeeded. Previously
+confirmed warning delivery is preserved. The closed state survives reloads and
+does not replay the pending action when the player rejoins.
+
+An already-active watch is **not** cancelled or extended by this closure. It
+keeps its original expiry across disconnects and reloads, and a new team kill
+after reconnecting can still trigger its automatic kick. Disconnecting before
+a watch starts, however, closes that pending case without starting a watch.
+Closing an alert does not prevent new team kills from producing a new case.
+
+Offline checks happen only after failed actions, not on another player poller.
+Checks are limited to one request per guild every three seconds, share the
+existing serialized RCON connection, and never cache absence for a later
+decision. If another failed action arrives during that cooldown, it remains
+pending until its next automatic retry or a new staff attempt. No BattleMetrics
+API calls are added. Reload with `[p]reload BattleMetric`; this change adds no
+slash options, so no slash sync is needed.
 
 ## HLL Database And Account Linking
 

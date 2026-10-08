@@ -106,7 +106,10 @@ class TKWatchTests(unittest.IsolatedAsyncioTestCase):
         settings = dict(tk.HLLTKWatchModule._EMPTY_SETTINGS)
         settings.update(enabled=True, channel_id=2, role_id=3, exclude_commander=False)
         self.config = Config(settings)
-        self.client = NS(message_player=AsyncMock(), kick_player=AsyncMock())
+        self.client = NS(
+            message_player=AsyncMock(), kick_player=AsyncMock(),
+            get_players=AsyncMock(return_value=NS(players=[NS(eos_id="eos")])),
+        )
 
         async def execute(guild, stage, operation):
             return await operation(self.client)
@@ -256,6 +259,209 @@ class TKWatchTests(unittest.IsolatedAsyncioTestCase):
         await self.module._process_alert_timers()
         self.assertTrue(self.module._alerts[1][record.message_id].warning_sent)
         self.assertEqual(len(self.channel.sent), 1)
+
+    async def test_offline_before_initial_warning_closes_without_watch_or_retries(self):
+        self.client.message_player.side_effect = RuntimeError("player not found")
+        self.client.get_players.return_value = NS(players=[])
+        record = await self.threshold()
+        self.assertEqual(record.status, "closed")
+        self.assertFalse(record.warning_sent)
+        self.assertIn("disconnected before action", record.decision)
+        self.assertFalse(self.module._watches.get(1))
+        self.assertFalse(self.module._timer_failures)
+        self.assertFalse(self.module._next_timer_at)
+        self.assertNotIn("eos", self.module._open_alert_players[1])
+        message = self.channel.messages[record.message_id]
+        self.assertIsNone(message.view)
+        self.assertEqual(message.embeds[0].color, discord.Color.orange())
+        message.delete.assert_not_awaited()
+        self.seconds = 301
+        await self.module._process_alert_timers()
+        self.assertEqual(self.client.message_player.await_count, 1)
+        self.assertEqual(len(self.channel.sent), 1)
+
+    async def test_offline_five_minute_default_closes_and_survives_reload(self):
+        record = await self.threshold()
+        self.client.message_player.side_effect = RuntimeError("player not found")
+        self.client.get_players.return_value = NS(players=[NS(eos_id="another-player")])
+        self.seconds = 300
+        await self.module._process_alert_timers()
+        closed = self.module._alerts[1][record.message_id]
+        self.assertEqual(closed.status, "closed")
+        self.assertTrue(closed.warning_sent)
+        self.assertFalse(self.module._watches.get(1))
+        reloaded = tk.HLLTKWatchModule(self.cog)
+        await reloaded._load_state()
+        self.assertEqual(reloaded._alerts[1][record.message_id].status, "closed")
+        self.assertNotIn("eos", reloaded._open_alert_players[1])
+        self.client.get_players.return_value = NS(players=[NS(eos_id="eos")])
+        await reloaded._process_alert_timers()
+        self.assertEqual(self.client.message_player.await_count, 2)
+        self.seconds = 900
+        await reloaded._cleanup_expired_state()
+        self.assertNotIn(record.message_id, reloaded._alerts[1])
+        self.channel.messages[record.message_id].delete.assert_not_awaited()
+
+    async def test_offline_manual_warn_and_kick_close_without_false_success(self):
+        for action in ("warn_watch", "kick"):
+            with self.subTest(action=action):
+                self.client.message_player.side_effect = None
+                record = await self.threshold()
+                self.client.message_player.side_effect = RuntimeError("player not found")
+                self.client.kick_player.side_effect = RuntimeError("player not found")
+                self.client.get_players.return_value = NS(players=[])
+                interaction = self.interaction(record)
+                await self.module.handle_action(interaction, action)
+                closed = self.module._alerts[1][record.message_id]
+                self.assertEqual(closed.status, "closed")
+                self.assertIn("<@4>", closed.decision)
+                self.assertTrue(interaction.followup.send.await_args.args[0].startswith("Case closed:"))
+                self.assertFalse(self.module._watches.get(1))
+                self.assertIsNone(self.channel.messages[record.message_id].view)
+                self.seconds += 3
+
+    async def test_offline_after_commander_lookup_failure_closes_case(self):
+        record = await self.threshold()
+        self.config.stored.value["exclude_commander"] = True
+        self.module._get_role.return_value = None
+        self.client.get_players.return_value = NS(players=[])
+        self.seconds = 300
+        await self.module._process_alert_timers()
+        self.assertEqual(self.module._alerts[1][record.message_id].status, "closed")
+        self.assertEqual(self.client.message_player.await_count, 1)
+
+    async def test_offline_manual_commander_lookup_failure_closes_case(self):
+        record = await self.threshold()
+        self.config.stored.value["exclude_commander"] = True
+        self.module._get_role.return_value = None
+        self.client.get_players.return_value = NS(players=[])
+        await self.module.handle_action(self.interaction(record), "kick")
+        self.assertEqual(self.module._alerts[1][record.message_id].status, "closed")
+        self.client.kick_player.assert_not_awaited()
+
+    async def test_rcon_outage_does_not_close_case(self):
+        record = await self.threshold()
+        self.client.message_player.side_effect = RuntimeError("RCON timeout")
+        self.client.get_players.side_effect = RuntimeError("RCON timeout")
+        self.seconds = 300
+        with self.assertLogs(tk.log, level="WARNING"):
+            await self.module._process_alert_timers()
+        self.assertEqual(self.module._alerts[1][record.message_id].status, "active")
+        self.assertIn(record.message_id, self.module._next_timer_at)
+        self.assertIsNotNone(self.channel.messages[record.message_id].view)
+        self.assertFalse(self.module._watches.get(1))
+
+    async def test_malformed_roster_never_proves_absence(self):
+        record = await self.threshold()
+        for players in (None, "", {}, [NS()], [NS(eos_id="")], [NS(eos_id=None)]):
+            with self.subTest(players=players):
+                self.client.get_players.return_value = NS(players=players)
+                result = await self.module._close_if_player_offline(self.guild, record, actor="test")
+                self.assertIsNone(result)
+                self.assertEqual(self.module._alerts[1][record.message_id].status, "active")
+                self.seconds += 3
+
+    async def test_player_identity_comparison_is_exact_and_case_insensitive(self):
+        record = await self.threshold()
+        self.client.get_players.return_value = NS(players=[NS(eos_id=" EOS ")])
+        self.assertIsNone(await self.module._close_if_player_offline(self.guild, record, actor="test"))
+        self.seconds += 3
+        self.client.get_players.return_value = NS(players=[NS(eos_id="eos-other")])
+        result = await self.module._close_if_player_offline(self.guild, record, actor="test")
+        self.assertEqual(result.status, "closed")
+
+    async def test_failed_kick_for_offline_watched_player_keeps_watch_across_reload(self):
+        record = await self.threshold()
+        self.seconds = 300
+        await self.module._process_alert_timers()
+        watch = self.module._watches[1]["eos"]
+        self.client.kick_player.side_effect = RuntimeError("player not found")
+        self.client.get_players.return_value = NS(players=[])
+        await self.module.handle_action(self.interaction(record), "kick")
+        closed = self.module._alerts[1][record.message_id]
+        self.assertEqual(closed.status, "closed")
+        self.assertIn("existing watch remains", closed.decision)
+        self.assertEqual(self.module._watches[1]["eos"], watch)
+        reloaded = tk.HLLTKWatchModule(self.cog)
+        await reloaded._load_state()
+        self.assertEqual(reloaded._watches[1]["eos"], watch)
+        self.client.kick_player.side_effect = None
+        self.seconds = 301
+        await reloaded._process_event(self.guild, self.event())
+        self.assertEqual(self.client.kick_player.await_count, 2)
+        self.assertFalse(reloaded._watches[1])
+
+    async def test_offline_checks_are_paced_including_manual_failures(self):
+        record = await self.threshold()
+        self.client.kick_player.side_effect = RuntimeError("action failed")
+        for _ in range(3):
+            with self.assertLogs(tk.log, level="ERROR"):
+                await self.module.handle_action(self.interaction(record), "kick")
+        self.assertEqual(self.client.get_players.await_count, 1)
+        self.client.get_players.return_value = NS(players=[])
+        self.seconds = 3
+        await self.module.handle_action(self.interaction(record), "kick")
+        self.assertEqual(self.client.get_players.await_count, 2)
+        self.assertEqual(self.module._alerts[1][record.message_id].status, "closed")
+
+    async def test_disable_during_offline_check_does_not_resurrect_alert(self):
+        record = await self.threshold()
+        async def roster():
+            await self.module.disable(self.guild)
+            return NS(players=[])
+        self.client.get_players.side_effect = roster
+        result = await self.module._close_if_player_offline(self.guild, record, actor="test")
+        self.assertIsNone(result)
+        self.assertFalse(self.module._alerts.get(1))
+        self.assertFalse(self.module._next_offline_check_at)
+
+    async def test_offline_close_does_not_override_forgiveness(self):
+        record = await self.threshold()
+        async def roster():
+            await self.module._perform_action(self.guild, record, "forgive", actor="staff")
+            return NS(players=[])
+        self.client.get_players.side_effect = roster
+        result = await self.module._close_if_player_offline(self.guild, record, actor="test")
+        self.assertIsNone(result)
+        self.assertEqual(self.module._alerts[1][record.message_id].status, "resolved")
+        self.assertIn("Forgiven", self.module._alerts[1][record.message_id].decision)
+
+    async def test_config_write_failure_keeps_case_pending(self):
+        record = await self.threshold()
+        self.client.get_players.return_value = NS(players=[])
+        self.config.stored.set = AsyncMock(side_effect=RuntimeError("storage unavailable"))
+        with self.assertLogs(tk.log, level="WARNING"):
+            result = await self.module._close_if_player_offline(self.guild, record, actor="test")
+        self.assertIsNone(result)
+        self.assertEqual(self.module._alerts[1][record.message_id].status, "active")
+        self.assertIn("eos", self.module._open_alert_players[1])
+
+    async def test_offline_check_cancellation_propagates_without_closing(self):
+        record = await self.threshold()
+        self.client.get_players.side_effect = asyncio.CancelledError()
+        with self.assertRaises(asyncio.CancelledError):
+            await self.module._close_if_player_offline(self.guild, record, actor="test")
+        self.assertEqual(self.module._alerts[1][record.message_id].status, "active")
+
+    async def test_healthy_actions_and_forgiveness_do_not_fetch_roster(self):
+        record = await self.threshold()
+        self.seconds = 300
+        await self.module._process_alert_timers()
+        await self.module.handle_action(self.interaction(record), "forgive")
+        self.client.get_players.assert_not_awaited()
+
+    async def test_closed_case_stale_buttons_do_not_issue_another_action(self):
+        self.client.message_player.side_effect = RuntimeError("player not found")
+        self.client.get_players.return_value = NS(players=[])
+        record = await self.threshold()
+        warnings = self.client.message_player.await_count
+        rosters = self.client.get_players.await_count
+        interaction = self.interaction(record)
+        await self.module.handle_action(interaction, "kick")
+        self.client.kick_player.assert_not_awaited()
+        self.assertEqual(self.client.message_player.await_count, warnings)
+        self.assertEqual(self.client.get_players.await_count, rosters)
+        self.assertIn("disconnected before action", interaction.followup.send.await_args.args[0])
 
     async def test_overdue_default_retains_retry_record_after_controls_expire(self):
         record = await self.threshold()
@@ -506,6 +712,7 @@ class TKWatchTests(unittest.IsolatedAsyncioTestCase):
         interaction.response.defer.assert_not_awaited()
         self.assertTrue(interaction.response.send_message.await_args.kwargs["ephemeral"])
         self.assertEqual(self.module._alerts[1][record.message_id].status, "active")
+        self.client.get_players.assert_not_awaited()
 
     async def test_unauthorized_configuration_does_no_work(self):
         self.cog.is_authorized.return_value = False

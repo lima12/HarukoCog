@@ -2,7 +2,7 @@
   "author": ["Haruko"],
   "name": "BattleMetric",
   "short": "BattleMetrics, HLL RCON moderation, stats, TK watch, protection, VIP, and dog-tag review cog.",
-  "description": "Modular Redbot cog for BattleMetrics server data, linked BattleMetrics and HLL: Vietnam RCON bans and unbans, authorized map changes and in-game messages, direct Discord replies to admin reports, kill feeds, automatic team-kill warnings with timed watches and forgiveness, role-pinging admin alerts, two-stage seeding with configurable warning duration, HQ protection, timed and seeding-reward VIPs, VIP team switching, PostgreSQL statistics, account linking, and custom dog-tag review.",
+  "description": "Modular Redbot cog for BattleMetrics server data, linked BattleMetrics and HLL: Vietnam RCON bans and unbans, authorized map changes and in-game messages, direct Discord replies to admin reports, kill feeds, automatic team-kill warnings with timed watches, forgiveness, and confirmed-offline case closure, role-pinging admin alerts, two-stage seeding with configurable warning duration, HQ protection, timed and seeding-reward VIPs, VIP team switching, PostgreSQL statistics, account linking, and custom dog-tag review.",
   "install_msg": "BattleMetric loaded. Use [p]help battlemetric, [p]help serverinfo, [p]help killfeed, [p]help dogtag, /link, /vnstat, or /hllvn.",
   "requirements": ["aiohttp", "asyncpg>=0.30,<0.32", "Pillow>=11,<13", "pydantic>=2.11.5,<2.12", "hllrcon>=2.0.0.4,<2.0.1"],
   "tags": ["battlemetrics", "api", "games", "servers", "hll", "rcon", "bans", "unban", "maps", "messaging", "team-kill", "admin-alerts", "seeding", "hq-protection", "vip", "team-swap", "dogtag", "postgresql"],

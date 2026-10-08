@@ -305,6 +305,15 @@ in-game role; when disabled, Commander alerts are explicitly labeled. The
 configuration command and every button are limited to users authorized through
 `[p]bm auth` and bot owners. Reload the cog and run `[p]slash sync` after updating.
 
+Failed TK warnings/defaults and staff Warn & Watch/Kick actions close the case
+only if a fresh, successful RCON player list confirms the target is offline.
+The embed is kept as `Closed - player disconnected before action`, with no
+buttons or further retries for that case. RCON outages keep the case pending;
+already-active watches retain their original expiry even if the player leaves.
+Offline checks use the shared RCON connection at most once per guild every
+three seconds. See the [TK disconnect handling](BattleMetric/README.md#players-who-disconnect-before-an-action)
+for failure behavior. This change needs a cog reload, not a slash sync.
+
 For the dog-tag carving site, configure the shared IPC secret and staff review
 channel after deploying `tagweb`:
 

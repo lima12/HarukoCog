@@ -157,6 +157,7 @@ class HLLTKWatchModule:
     MAX_SEEN_EVENTS = 4000
     MAX_EVENTS_PER_GUILD_PER_PASS = 25
     MAX_RETRY_SECONDS = 60
+    OFFLINE_CHECK_INTERVAL_SECONDS = 3
 
     WARNING_MESSAGE = (
         "your Team Kill have been noticed by admin. Please avoid TK by all cost"
@@ -193,6 +194,7 @@ class HLLTKWatchModule:
         self._registered_views: dict[int, HLLTKWatchActionView] = {}
         self._timer_failures: dict[int, int] = {}
         self._next_timer_at: dict[int, float] = {}
+        self._next_offline_check_at: dict[int, float] = {}
 
     def register_config(self) -> None:
         self.cog.config.register_guild(hll_tk_watch=dict(self._EMPTY_SETTINGS))
@@ -229,6 +231,7 @@ class HLLTKWatchModule:
         self._watch_failure_notified.clear()
         self._timer_failures.clear()
         self._next_timer_at.clear()
+        self._next_offline_check_at.clear()
 
     def should_poll(self, guild_id: int) -> bool:
         return guild_id in self._enabled_guilds
@@ -611,7 +614,11 @@ class HLLTKWatchModule:
                 await interaction.followup.send("This team-kill action window has expired.")
                 return
             if record.status not in {"active", "watching"}:
-                await interaction.followup.send("Another administrator already handled this alert.")
+                if record.status == "closed":
+                    await self._edit_alert_message(guild, record, message)
+                    await interaction.followup.send(record.decision)
+                else:
+                    await interaction.followup.send("Another administrator already handled this alert.")
                 return
             if action == "warn_watch" and record.status == "watching":
                 await interaction.followup.send("This player is already watched. You can still forgive or kick them.")
@@ -627,18 +634,19 @@ class HLLTKWatchModule:
                 )
             except asyncio.CancelledError:
                 raise
-            except (ValueError, KillFeedConnectionTestError) as exc:
-                await interaction.followup.send(str(exc))
-                return
-            except Exception:
-                log.exception(
-                    "Unexpected HLL TK-watch button failure for guild %s",
-                    guild.id,
+            except Exception as exc:
+                updated = None if action == "forgive" else await self._close_if_player_offline(
+                    guild, record, actor=interaction.user.mention
                 )
-                await interaction.followup.send(
-                    "The RCON action failed. The buttons remain available; check the bot log and retry."
-                )
-                return
+                if updated is None:
+                    if isinstance(exc, (ValueError, KillFeedConnectionTestError)):
+                        await interaction.followup.send(str(exc))
+                    else:
+                        log.exception("HLL TK-watch button action failed in guild %s", guild.id)
+                        await interaction.followup.send(
+                            "The RCON action failed. The buttons remain available; check the bot log and retry."
+                        )
+                    return
 
             if updated is None:
                 await interaction.followup.send(
@@ -646,7 +654,62 @@ class HLLTKWatchModule:
                 )
                 return
             await self._edit_alert_message(guild, updated, message)
-            await interaction.followup.send(f"Action completed: {updated.decision}")
+            label = "Case closed" if updated.status == "closed" else "Action completed"
+            await interaction.followup.send(f"{label}: {updated.decision}")
+
+    async def _close_if_player_offline(
+        self, guild: discord.Guild, record: HLLTKAlertRecord, *, actor: str
+    ) -> HLLTKAlertRecord | None:
+        """Close a failed action only after a fresh, valid roster proves absence."""
+        if not self.should_poll(guild.id):
+            return None
+        now = time.monotonic()
+        if now < self._next_offline_check_at.get(guild.id, 0):
+            return None
+        # Claim before yielding; failures and simultaneous staff actions share pacing.
+        self._next_offline_check_at[guild.id] = now + self.OFFLINE_CHECK_INTERVAL_SECONDS
+        try:
+            response = await self.cog.kill_feed.execute_rcon(
+                guild, "GetPlayers TK offline check", lambda client: client.get_players()
+            )
+            players = getattr(response, "players", None)
+            if not isinstance(players, (list, tuple)):
+                return None
+            target = record.eos_id.strip().casefold()
+            for player in players:
+                eos_id = getattr(player, "eos_id", None)
+                if not isinstance(eos_id, str) or not eos_id.strip():
+                    return None
+                if eos_id.strip().casefold() == target:
+                    return None
+
+            async with self._guild_lock(guild.id):
+                current = self._alerts.get(guild.id, {}).get(record.message_id)
+                if (
+                    not self.should_poll(guild.id) or current is None
+                    or current.status not in {"active", "watching"}
+                ):
+                    return None
+                decision = "Closed - player disconnected before action"
+                if self._active_watch(guild.id, current.eos_id) is not None:
+                    decision += "; existing watch remains until expiry"
+                updated = replace(current, status="closed", decision=f"{decision} by {actor}")
+                settings = await self.get_settings(guild)
+                self._write_runtime_state(guild.id, settings)
+                settings["active_alerts"][str(current.message_id)] = updated.to_config()
+                # Persist before changing memory so a failed Config write is retryable.
+                await self.cog.config.guild(guild).hll_tk_watch.set(settings)
+                self._alerts[guild.id][current.message_id] = updated
+                self._open_alert_players.setdefault(guild.id, set()).discard(current.eos_id)
+                self._clear_window(guild.id, current.eos_id)
+                self._timer_failures.pop(current.message_id, None)
+                self._next_timer_at.pop(current.message_id, None)
+                return updated
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("Could not confirm/record TK player absence in guild %s", guild.id, exc_info=True)
+            return None
 
     async def _perform_action(
         self,
@@ -769,6 +832,12 @@ class HLLTKWatchModule:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                closed = await self._close_if_player_offline(
+                    guild, current, actor="Automatic TK warning/watch"
+                )
+                if closed is not None:
+                    await self._edit_alert_message(guild, closed)
+                    return
                 failures = self._timer_failures.get(record.message_id, 0) + 1
                 self._timer_failures[record.message_id] = failures
                 self._next_timer_at[record.message_id] = time.monotonic() + min(
@@ -991,6 +1060,8 @@ class HLLTKWatchModule:
             embed = message.embeds[0].copy() if message.embeds else discord.Embed()
             if record.status == "resolved":
                 embed.color = discord.Color.green()
+            elif record.status == "closed":
+                embed.color = discord.Color.orange()
             fields = {
                 "Automatic warning": "Sent to the player." if record.warning_sent else "Delivery pending or cancelled.",
                 "Decision": record.decision or "Awaiting an administrator or the five-minute default.",
@@ -1002,7 +1073,7 @@ class HLLTKWatchModule:
                 else:
                     embed.set_field_at(index, name=name, value=value, inline=False)
             expired = record.expires_at <= int(discord.utils.utcnow().timestamp())
-            view = None if expired or record.status == "resolved" else HLLTKWatchActionView(
+            view = None if expired or record.status in {"resolved", "closed"} else HLLTKWatchActionView(
                 self, watching=record.status == "watching"
             )
             embed.set_footer(text=(
@@ -1146,7 +1217,7 @@ class HLLTKWatchModule:
             status = str(raw.get("status", "active"))
             if status == "processing":
                 status = "active"
-            if status not in {"active", "watching", "resolved"}:
+            if status not in {"active", "watching", "resolved", "closed"}:
                 status = "active"
             parsed[message_id] = HLLTKAlertRecord(
                 message_id=message_id,
@@ -1230,6 +1301,7 @@ class HLLTKWatchModule:
         self._windows.pop(guild_id, None)
         self._failure_counts.pop(guild_id, None)
         self._next_process_at.pop(guild_id, None)
+        self._next_offline_check_at.pop(guild_id, None)
 
     def _guild_lock(self, guild_id: int) -> asyncio.Lock:
         return self._guild_locks.setdefault(guild_id, asyncio.Lock())
