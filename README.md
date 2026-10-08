@@ -242,6 +242,16 @@ popup and temporary purge protection without changing their original VIP.
 RCON requests are spaced two seconds apart, so a full server can take several
 minutes.
 
+Successfully rewarded players also receive the existing BattleMetrics `Seeder`
+flag from the configured server's organization. Create that organization-owned
+flag once in [BattleMetrics](https://learn.battlemetrics.com/article/51-how-can-i-create-or-edit-player-flags)
+and give the existing vaulted API key identifier/flag access. Exact game IDs
+are matched in batches, existing flags are preserved, and flag requests are
+paced two seconds apart. The private result separates grant, popup, and flag
+failures; BattleMetrics failures never undo VIP rewards. Seeder flags remain
+after VIP expiry. See [Seeder flag setup](BattleMetric/README.md#battlemetrics-seeder-flag).
+Reload BattleMetric to activate this addition; no slash sync is needed.
+
 All linked members can also exchange their confirmed kills through the private
 VIP purchase modal:
 

@@ -59,7 +59,7 @@ class PlayerFlagsModule:
     async def _resources(self, document: Mapping[str, Any], path: str) -> list[Mapping[str, Any]]:
         resources: list[Mapping[str, Any]] = []
         visited: set[str] = set()
-        for _ in range(self.MAX_PAGES):
+        for page in range(self.MAX_PAGES):
             data = document.get("data")
             if not isinstance(data, list) or any(not isinstance(item, Mapping) for item in data):
                 raise ValueError("BattleMetrics returned an invalid flag list.")
@@ -78,10 +78,13 @@ class PlayerFlagsModule:
                 parsed.fragment or parsed.path != path
                 or (parsed.scheme and parsed.scheme != "https")
                 or (parsed.netloc and parsed.netloc != "api.battlemetrics.com")
+                or bool(parsed.scheme) != bool(parsed.netloc)
                 or next_link in visited
             ):
                 raise ValueError("BattleMetrics returned an unsafe or repeated flag pagination link.")
             visited.add(next_link)
+            if page + 1 == self.MAX_PAGES:
+                break
             document = await self._request(lambda url=next_link: self.cog.api.get(url, auth=True))
         raise ValueError("BattleMetrics flag pagination exceeded the safety limit.")
 
@@ -122,7 +125,7 @@ class PlayerFlagsModule:
 
     @staticmethod
     def _identifier_types(eos_id: str) -> tuple[str, ...]:
-        return ("steamID",) if eos_id.isdigit() else ("eosID", "hllWindowsID")
+        return ("steamID",) if len(eos_id) == 17 and eos_id.isdigit() else ("eosID", "hllWindowsID")
 
     @classmethod
     def _matched_players(cls, document: Mapping[str, Any], targets: Sequence[str]) -> dict[str, str]:
@@ -185,6 +188,8 @@ class PlayerFlagsModule:
         added = already = 0
         failed: list[str] = []
         stopped: str | None = None
+        confirmed_players: set[str] = set()
+        failed_players: set[str] = set()
         for offset in range(0, len(targets), self.MATCH_BATCH_SIZE):
             chunk = targets[offset:offset + self.MATCH_BATCH_SIZE]
             try:
@@ -206,15 +211,23 @@ class PlayerFlagsModule:
                 if player_id is None:
                     failed.append(eos_id)
                     continue
+                if player_id in confirmed_players:
+                    already += 1
+                    continue
+                if player_id in failed_players:
+                    failed.append(eos_id)
+                    continue
                 try:
                     if await self._already_flagged(player_id, flag_id):
                         already += 1
                     else:
                         await self._request(lambda: self.cog.api.assign_player_flag(player_id, flag_id))
                         added += 1
+                    confirmed_players.add(player_id)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    failed_players.add(player_id)
                     stopped = self._stop_reason(exc)
                     failed.extend(targets[offset + index:] if stopped else (eos_id,))
                     log.warning("Seeder flagging failed in guild %s (%s)", guild.id, type(exc).__name__)

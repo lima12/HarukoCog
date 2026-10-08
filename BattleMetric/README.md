@@ -43,7 +43,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn mesg target:EOS_ID mesgs:MESSAGE` - Authorized member. Send a private in-game popup directly by game account ID.
 - `/hllvn mesg target:ALL mesgs:MESSAGE` - Authorized member. Send an in-game popup to every connected player.
 - `/hllvn changemap map_name:<map>` - Authorized member. Submit a map change immediately using a specific map/mode or exact server map ID; the game server's countdown still applies.
-- `/hllvn giveseedvip duration:2d` - Authorized member. Reward players currently on the game server with timed VIP and a private in-game popup.
+- `/hllvn giveseedvip duration:2d` - Authorized member. Reward current players with timed VIP, a private in-game popup, and the organization's BattleMetrics Seeder flag.
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
 - `/hllvn allowvipteamswap toggle:<choice>` - Authorized member. Enable or disable the VIP-only in-game `!changeteam` command.
@@ -475,6 +475,54 @@ removed by the bot because its expiry is unknown. The command spaces RCON
 requests two seconds apart and reports grant and popup failures separately.
 Players joining after the snapshot are not included. The Discord response is
 private to the authorized command user.
+
+### BattleMetrics Seeder Flag
+
+After the RCON reward batch, `/hllvn giveseedvip` also adds the BattleMetrics
+player flag named `Seeder` to successfully rewarded players. External VIPs
+whose original access was preserved also qualify. Failed VIP grants do not.
+Popup failure does not prevent flagging a successfully rewarded player.
+
+One-time setup:
+
+1. In the BattleMetrics organization that owns your configured server, create
+   exactly one organization-owned player flag named `Seeder`. Name matching is
+   case-insensitive. The cog reuses this definition; it does not create, rename,
+   or edit definitions. See [BattleMetrics' flag setup guide](https://learn.battlemetrics.com/article/51-how-can-i-create-or-edit-player-flags).
+2. Ensure `[p]bm setserver <server_id>` (also used by Server Info) points to the
+   BattleMetrics counterpart of your configured HLL RCON server.
+3. Give the existing `battlemetrics` API key access to that organization's
+   server and player identifiers, read player flags, and assign flags. Keep the
+   key in Red's shared token vault; no new credential or database is required.
+4. Run `[p]reload BattleMetric`, then `/hllvn giveseedvip duration:2d`. There are
+   no new slash options, so this update does not require a slash sync.
+
+The bot discovers the server's organization once per batch and refuses to
+choose a same-named flag belonging to another organization, a shared/read-only
+flag, or an ambiguous duplicate. Players are resolved using exact EOS/HLL
+Windows IDs or 17-digit Steam IDs, never names or Discord links. Unmatched or
+ambiguous profiles are reported as flag failures rather than guessed.
+
+Identifier lookups are batched in groups of 25 players, with at most 50
+identifier resources per request. Every flag-related HTTP request is paced
+through the shared API client at least two seconds apart across guilds. Flag
+lists and assignments are paginated with a bounded, same-origin check. Existing
+active Seeder assignments are preserved without another write, and other flags
+are never replaced or removed. A full-server command can take several minutes
+longer than the RCON-only batch; do not start another reward batch while it runs.
+
+The private result reports VIP grants, popup failures, flags added, players
+already flagged, and unconfirmed flag EOS IDs independently. A missing token,
+server, organization, flag, or API outage does not undo successful VIP rewards.
+Permission denials and HTTP 429 stop remaining flag requests for that batch;
+other per-player failures are isolated. Ambiguous writes are not blindly
+retried. Inspect the BattleMetrics profiles before manually retrying flagging:
+running `giveseedvip` again also extends VIP time again.
+
+Seeder flags are persistent recognition, not timed VIP access: VIP expiry and
+`purgevip` never remove them. They remain in BattleMetrics until staff remove
+them there. Match results, flag IDs, and failure lists are held only for the
+current command; the cog adds no persistent flag tracking or retry worker.
 
 `/hllvn buyvip` is available to every guild member. It first requires the
 member to have completed `/link`, then opens the private
