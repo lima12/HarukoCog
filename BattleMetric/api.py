@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 from urllib.parse import quote, urljoin
 
 import aiohttp
@@ -147,6 +147,16 @@ class BattleMetricsClient:
         identifier_types: tuple[str, ...],
     ) -> Dict[str, Any]:
         """Match a game identifier to its BattleMetrics player resource."""
+        return await self.quick_match_player_batch(
+            [(identifier, identifier_type) for identifier_type in identifier_types]
+        )
+
+    async def quick_match_player_batch(
+        self, identifiers: Sequence[tuple[str, str]]
+    ) -> Dict[str, Any]:
+        """Match a bounded batch of exact game identifiers in one request."""
+        if not 1 <= len(identifiers) <= 50:
+            raise ValueError("Match between 1 and 50 identifiers per request.")
         data = [
             {
                 "type": "identifier",
@@ -155,12 +165,43 @@ class BattleMetricsClient:
                     "identifier": identifier,
                 },
             }
-            for identifier_type in identifier_types
+            for identifier, identifier_type in identifiers
         ]
         return await self.request(
             "POST",
             "/players/quick-match",
             json={"data": data},
+            auth=True,
+        )
+
+    async def list_player_flags(self) -> Dict[str, Any]:
+        """List organization-owned flag definitions visible to this token."""
+        return await self.get(
+            "/player-flags",
+            params={"filter": {"personal": "false"}, "page": {"size": 100}},
+            auth=True,
+        )
+
+    async def list_player_flag_assignments(self, player_id: str) -> Dict[str, Any]:
+        safe_id = quote(str(player_id).strip(), safe="")
+        if not safe_id:
+            raise ValueError("A BattleMetrics player ID is required.")
+        return await self.get(
+            f"/players/{safe_id}/relationships/flags",
+            params={"page": {"size": 100}}, auth=True,
+        )
+
+    async def assign_player_flag(self, player_id: str, flag_id: str) -> Dict[str, Any]:
+        """Add one flag assignment without replacing any existing flags."""
+        safe_id = quote(str(player_id).strip(), safe="")
+        flag_id = str(flag_id).strip()
+        if not safe_id or not flag_id:
+            raise ValueError("BattleMetrics player and flag IDs are required.")
+        return await self.request(
+            "POST", f"/players/{safe_id}/relationships/flags",
+            json={"data": {"type": "flagPlayer", "relationships": {
+                "playerFlag": {"data": {"type": "playerFlag", "id": flag_id}},
+            }}},
             auth=True,
         )
 

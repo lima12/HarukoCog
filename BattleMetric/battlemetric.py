@@ -30,6 +30,7 @@ from .module import (
     KillFeedModule,
     PlayerStatsCommandsMixin,
     PlayerStatsModule,
+    PlayerFlagsModule,
     ServerInfoCommandsMixin,
     ServerInfoModule,
 )
@@ -57,7 +58,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.13.1"
+    __version__ = "1.14.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -82,6 +83,7 @@ class BattleMetric(
         self.hll_database = HLLDatabaseModule(self)
         self.player_stats = PlayerStatsModule(self)
         self.hll_vip = HLLVIPModule(self)
+        self.player_flags = PlayerFlagsModule(self)
         self.hll_ban = HLLBanModule(self)
         self.hll_messaging = HLLMessagingModule(self)
         self.hll_maps = HLLMapModule(self)

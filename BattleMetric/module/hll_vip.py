@@ -17,6 +17,7 @@ from discord.ext import tasks
 from .hll_database import HLLDatabaseError
 from .hll_group import HLLVN_COMMAND_GROUP
 from .kill_feed import KillFeedConnectionTestError
+from .player_flags import HLLSeederFlagResult
 
 log = logging.getLogger("red.BattleMetric.hll_vip")
 
@@ -74,6 +75,7 @@ class HLLSeedVIPResult:
     invalid_ids: int
     failed: tuple[str, ...]
     message_failed: tuple[str, ...]
+    flags: HLLSeederFlagResult = HLLSeederFlagResult()
 
 
 class HLLVIPPurchaseModal(discord.ui.Modal):
@@ -453,6 +455,7 @@ class HLLVIPModule:
             protected_external_vip = 0
             failed: list[str] = []
             message_failed: list[str] = []
+            rewarded_ids: list[str] = []
             reward_text = self.format_duration(duration_seconds)
             popup = f"Thank you for helping seed the server! Here is {reward_text} of VIP as a reward <3"
             for index, (eos_id, player_id, name, is_external_vip) in enumerate(targets):
@@ -483,6 +486,7 @@ class HLLVIPModule:
                     log.warning("Could not grant seeding VIP to %s in guild %s: %s", eos_id, guild.id, exc)
                 else:
                     rewarded += 1
+                    rewarded_ids.append(eos_id)
                     if is_external_vip:
                         protected_external_vip += 1
                     await asyncio.sleep(self.SEED_REWARD_REQUEST_INTERVAL_SECONDS)
@@ -505,6 +509,16 @@ class HLLVIPModule:
                 if index + 1 < len(targets):
                     await asyncio.sleep(self.SEED_REWARD_REQUEST_INTERVAL_SECONDS)
 
+            try:
+                flags = await self.cog.player_flags.flag_seeders(guild, rewarded_ids)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("Seeder flagging failed after VIP rewards in guild %s", guild.id)
+                flags = HLLSeederFlagResult(
+                    failed=tuple(rewarded_ids),
+                    error="BattleMetrics flagging failed. Successful VIP rewards remain valid.",
+                )
             return HLLSeedVIPResult(
                 online_players=len(players),
                 rewarded=rewarded,
@@ -512,6 +526,7 @@ class HLLVIPModule:
                 invalid_ids=invalid_ids,
                 failed=tuple(failed),
                 message_failed=tuple(message_failed),
+                flags=flags,
             )
 
     async def _protect_external_vip(
@@ -864,7 +879,9 @@ class HLLVIPCommandsMixin:
 
         embed = discord.Embed(
             title="HLL VN Seeding VIP Reward",
-            color=(discord.Color.orange() if result.failed else discord.Color.green()),
+            color=(discord.Color.orange() if (
+                result.failed or result.message_failed or result.flags.failed or result.flags.error
+            ) else discord.Color.green()),
             timestamp=discord.utils.utcnow(),
         )
         embed.add_field(name="Online at Snapshot", value=str(result.online_players), inline=True)
@@ -885,6 +902,16 @@ class HLLVIPCommandsMixin:
             value=str(len(result.message_failed)),
             inline=True,
         )
+        embed.add_field(name="Seeder Flags Added", value=str(result.flags.added), inline=True)
+        embed.add_field(name="Already Flagged Seeder", value=str(result.flags.already_flagged), inline=True)
+        embed.add_field(name="Flag Failures", value=str(len(result.flags.failed)), inline=True)
+        if result.flags.error:
+            embed.add_field(name="BattleMetrics Flag Status", value=result.flags.error[:1024], inline=False)
+        if result.flags.failed:
+            embed.add_field(
+                name="Unconfirmed Seeder Flag EOS IDs",
+                value=self._format_purge_ids(result.flags.failed), inline=False,
+            )
         if result.invalid_ids:
             embed.add_field(
                 name="Invalid Player IDs Skipped",
@@ -898,7 +925,7 @@ class HLLVIPCommandsMixin:
                 inline=False,
             )
         embed.set_footer(
-            text="Rewards are protected from purgevip; external VIP access stays unchanged."
+            text="VIP rewards are purge-protected; Seeder flags remain after VIP expiry."
         )
         await interaction.followup.send(
             embed=embed,
