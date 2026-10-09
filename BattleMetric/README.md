@@ -197,6 +197,9 @@ sectors. Reaching `stage_one_players` unlocks the fourth sector while the fifth
 remains locked. Reaching `stage_two_players` fully unlocks the map and suspends
 seeding enforcement. If population later drops below a threshold, the matching
 locks resume after the next status refresh.
+Reaching a threshold does not permanently unlock objectives or disable the saved
+configuration. Each downward stage change triggers a fresh position scan, so
+established players already standing in a newly locked sector are also checked.
 
 On Offensive, only the attacking team is restricted. Before Stage 1, attackers
 may advance through the second objective while the third through fifth sectors
@@ -208,8 +211,9 @@ so the cog does not infer it from player names or scores.
 Mirrored map direction is handled from `hllrcon` map metadata. Unassigned
 players and invalid or zero positions are ignored. The RCON response does not
 identify which one of a sector's possible strongpoints is active, so the complete applicable
-capture sectors are protected. This prevents captures reliably and avoids
-guessing the active point.
+capture sectors are protected rather than guessing the active point. Protection
+uses RCON warnings and kills, not a native capture-disable switch, and cannot undo
+objectives already captured during the status-refresh delay.
 
 To avoid alarming joining or team-switching players, territory enforcement
 waits silently for ten seconds after first observing a player, a team change,
@@ -224,7 +228,12 @@ The RCON player response has no explicit alive/spawned flag; this guard uses
 observed team, death counter, and position changes rather than claiming exact
 life-state detection. Players first seen while stationary become eligible once
 a position change is observed. These observations stay in memory and are
-cleared on reload, layer changes, and RCON failures. They do not add API calls.
+cleared on reload, layer changes, and RCON failures. Readiness is retained through
+Stage 2 instead of treating established players as fresh joins when counts drop.
+While fully unlocked with HQ protection inactive, one roster snapshot at each
+60-second status refresh tracks observed joins, departures, team changes, deaths,
+and movement without warning or punishing anyone. Transitions that occur entirely
+between snapshots cannot always be detected, since RCON has no alive flag.
 
 With warning-to-punish selected, a violating player receives an RCON warning
 approximately once per second for the configured `warning_seconds` duration
@@ -237,13 +246,15 @@ duration.
 Immediate punishment skips the warning period. A player is not punished again
 until a scan observes them leave the sector and later return.
 
-After updating this command, run `[p]reload BattleMetric` and `[p]slash sync`
-to expose the new `warning_seconds` option.
+Run `[p]reload BattleMetric` to load this fix. Only run `[p]slash sync` if your
+installation does not yet expose the `warning_seconds` option; this fix does not
+change command arguments.
 
 Player count, game mode, and stage are checked once every 60 seconds. Player-position
-requests run every three seconds only while the cached status says protection
-is active. This means crossing either population threshold can take up to 60
-seconds to change enforcement. Warnings and punishments are
+requests run every three seconds only while the cached status says seeding or HQ
+protection is active. When both are inactive at Stage 2, only the one roster
+snapshot per status refresh is requested. This means crossing either population
+threshold can take up to 60 seconds to change enforcement. Warnings and punishments are
 serialized through the shared RCON lock, capped at 20 actions per rule in each
 worker pass, and position-request failures back off to 60 seconds. This module
 does not call BattleMetrics and sends no periodic Discord messages.

@@ -116,8 +116,14 @@ before Stage 1, only the fifth remains locked after Stage 1, and Stage 2 fully
 unlocks the map. On Offensive, attackers can reach the second objective before
 Stage 1, the third after Stage 1, and all objectives after Stage 2. Defenders
 are not restricted. Use the same command with `Disable` to turn the feature off.
+Falling below either threshold re-locks the matching sectors on the next status
+check, including for established players already standing there. While Stage 2
+is fully unlocked and HQ protection is inactive, one roster snapshot every 60
+seconds keeps player readiness current without enforcing penalties. This does
+not undo objectives already captured during the status-check delay.
 Omitting `warning_seconds` keeps the saved duration, which defaults to five
-seconds. Reload `BattleMetric` and run `[p]slash sync` after updating the cog.
+seconds. Reload `BattleMetric` after updating; slash sync is only needed for
+command changes, not this protection fix.
 Seeding and HQ enforcement silently wait for a ten-second settling period and
 a new position after joins, team changes, and observed deaths, so retained
 spawn-screen coordinates do not immediately trigger a warning.

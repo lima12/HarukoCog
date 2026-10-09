@@ -306,7 +306,10 @@ class HLLSeedingModule:
             "seeding player-position request",
             lambda client: client.get_players(),
         )
-        return tuple(getattr(response, "players", ()))
+        players = getattr(response, "players", None)
+        if not isinstance(players, (list, tuple)):
+            raise ValueError("RCON returned an invalid player roster.")
+        return tuple(players)
 
     @tasks.loop(seconds=WORKER_INTERVAL_SECONDS)
     async def enforcement_worker(self) -> None:
@@ -389,6 +392,7 @@ class HLLSeedingModule:
                 and seeding_stage < 2
             )
             hq_active = hq_settings.enabled and warfare
+            previous_stage = self._seeding_stages.get(guild.id)
 
             if not seeding_active:
                 self._active_guilds.discard(guild.id)
@@ -412,10 +416,30 @@ class HLLSeedingModule:
                     self._seeding_stages[guild.id] = seeding_stage
                 if hq_active:
                     self._hq_active_guilds.add(guild.id)
-                self._next_position_scan_at.setdefault(guild.id, 0)
+                if seeding_active and previous_stage != seeding_stage:
+                    self._next_position_scan_at[guild.id] = 0
+                else:
+                    self._next_position_scan_at.setdefault(guild.id, 0)
             else:
                 self._next_position_scan_at.pop(guild.id, None)
-                self._player_trackers.pop(guild.id, None)
+                if settings.enabled and supported_seeding_mode:
+                    # Keep readiness warm while Stage 2 is unlocked. Otherwise
+                    # stationary veterans look like fresh joins when counts drop.
+                    try:
+                        players = await self._inspect_players(guild)
+                        tracker = self._player_trackers.setdefault(
+                            guild.id,
+                            TerritoryPlayerTracker(self.PLAYER_SETTLING_SECONDS),
+                        )
+                        tracker.eligible_players(players, time.monotonic())
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - invalidate stale readiness
+                        self._record_status_failure(guild.id, exc)
+                        return
+                    self._position_failure_counts.pop(guild.id, None)
+                else:
+                    self._player_trackers.pop(guild.id, None)
 
         if (
             guild.id not in self._active_guilds
