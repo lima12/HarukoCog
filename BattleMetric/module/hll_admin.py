@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -56,12 +57,17 @@ class HLLAdminModule:
         return name
 
     @classmethod
-    def resolve_group(cls, response: Any, requested: str) -> str:
+    def group_names(cls, response: Any) -> tuple[str, ...]:
         names = getattr(response, "group_names", None)
         if not isinstance(names, (list, tuple)) or not all(
             isinstance(name, str) and name.strip() for name in names
         ):
             raise HLLAdminValidationError("RCON returned an invalid admin group list. No change was submitted.")
+        return tuple(cls.validate_group(name) for name in names)
+
+    @classmethod
+    def resolve_group(cls, response: Any, requested: str) -> str:
+        names = cls.group_names(response)
         requested = cls.validate_group(requested)
         matches = [name for name in names if name.casefold() == requested.casefold()]
         if len(matches) != 1:
@@ -70,6 +76,38 @@ class HLLAdminModule:
                 "Configure a server-defined group with /hllvn admin group."
             )
         return cls.validate_group(matches[0])
+
+    async def get_groups(self, guild: discord.Guild) -> tuple[str, ...]:
+        response = await self.cog.kill_feed.execute_rcon(
+            guild, "GetAdminGroups request", lambda client: client.get_admin_groups()
+        )
+        return self.group_names(response)
+
+    @staticmethod
+    def groups_embed(groups: tuple[str, ...], selected: str) -> tuple[discord.Embed, discord.File | None]:
+        names = sorted(groups, key=str.casefold)
+        description = "\n".join(f"- {discord.utils.escape_markdown(name)}" for name in names)
+        attachment = None
+        if len(description) > 3800:
+            attachment = discord.File(
+                io.BytesIO(("\n".join(names) + "\n").encode("utf-8")), filename="hllvn-admin-groups.txt"
+            )
+            description = f"{len(names)} groups returned. The complete list is attached."
+        matches = [name for name in groups if name.casefold() == selected.casefold()]
+        embed = discord.Embed(
+            title="HLL VN Admin Groups",
+            description=description or "No admin groups were returned by the server.",
+            color=discord.Color.green() if len(matches) == 1 else discord.Color.orange(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Promotion Group", value=discord.utils.escape_markdown(selected), inline=False)
+        embed.add_field(
+            name="Promotion Group Status",
+            value="Available" if len(matches) == 1 else "Missing from server" if not matches else "Ambiguous name",
+            inline=False,
+        )
+        embed.add_field(name="Group Permissions", value="Not returned by RCON; defined in server configuration.", inline=False)
+        return embed, attachment
 
     @staticmethod
     def admin_users(response: Any) -> dict[str, str]:
@@ -172,6 +210,19 @@ class HLLAdminCommandsMixin:
             return
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
+            if action == "groups":
+                groups = await self.hll_admin.get_groups(guild)
+                selected = self.hll_admin.validate_group(await self.config.guild(guild).hll_admin_group())
+                embed, attachment = self.hll_admin.groups_embed(groups, selected)
+                kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none()}
+                if attachment is not None:
+                    kwargs["file"] = attachment
+                try:
+                    await interaction.followup.send(**kwargs)
+                finally:
+                    if attachment is not None:
+                        attachment.close()
+                return
             if action == "group":
                 group = await self.hll_admin.set_group(guild, name)
                 await interaction.followup.send(
@@ -186,6 +237,9 @@ class HLLAdminCommandsMixin:
             await interaction.followup.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
             return
         except KillFeedConnectionTestError:
+            if action == "groups":
+                await interaction.followup.send("Could not read the server admin groups. No access was changed.")
+                return
             await interaction.followup.send(
                 "RCON admin state could not be confirmed. A confirmed request may already have "
                 "changed access. Check the server admin list before retrying.",
@@ -254,3 +308,8 @@ class HLLAdminCommandsMixin:
     @app_commands.guild_only()
     async def hllvn_admin_group(self, interaction: discord.Interaction, name: str) -> None:
         await self._hllvn_admin_request(interaction, action="group", name=name)
+
+    @hllvn_admin.command(name="groups", description="List available in-game admin groups and the promotion group.")
+    @app_commands.guild_only()
+    async def hllvn_admin_groups(self, interaction: discord.Interaction) -> None:
+        await self._hllvn_admin_request(interaction, action="groups")

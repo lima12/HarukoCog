@@ -44,6 +44,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn mesg target:ALL mesgs:MESSAGE` - Authorized member. Send an in-game popup to every connected player.
 - `/hllvn changemap map_name:<map>` - Authorized member. Submit a map change immediately using a specific map/mode or exact server map ID; the game server's countdown still applies.
 - `/hllvn admin group name:Admin` - Authorized member. Set the server-defined group used for future promotions.
+- `/hllvn admin groups` - Authorized member. Read available server admin groups and the configured promotion group.
 - `/hllvn admin promote eos_id:EOS_ID confirm:false` - Authorized member. Preview granting in-game admin access; use `confirm:true` to apply.
 - `/hllvn admin demote eos_id:EOS_ID confirm:false` - Authorized member. Preview removing in-game admin access; use `confirm:true` to apply.
 - `/hllvn giveseedvip duration:2d` - Authorized member. Reward current players with timed VIP, a private in-game popup, and the organization's BattleMetrics Seeder flag.
@@ -84,11 +85,19 @@ These commands manage the game's admin list, not the bot's authorization list,
 Discord roles, or BattleMetrics organization staff.
 
 RCON promotion requires an existing group defined in the game server's
-configuration. Select it for this Discord guild first:
+configuration. Inspect available groups, then select one for this Discord guild:
 
 ```text
+/hllvn admin groups
 /hllvn admin group name:Admin
 ```
+
+`groups` makes one read-only RCON request and replies privately with the server's
+group names, the configured promotion group, and whether that selection is
+available, missing, or ambiguous. RCON returns names only, not each group's
+permission definitions; inspect the server configuration for those permissions.
+Long lists are returned in a complete text attachment instead of being truncated
+or sending a burst of messages. This command never changes access or settings.
 
 The default is `Admin`. Group names are matched case-insensitively against
 `GetAdminGroups`, preserving the server's spelling; missing or ambiguous groups
