@@ -43,6 +43,9 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn mesg target:EOS_ID mesgs:MESSAGE` - Authorized member. Send a private in-game popup directly by game account ID.
 - `/hllvn mesg target:ALL mesgs:MESSAGE` - Authorized member. Send an in-game popup to every connected player.
 - `/hllvn changemap map_name:<map>` - Authorized member. Submit a map change immediately using a specific map/mode or exact server map ID; the game server's countdown still applies.
+- `/hllvn admin group name:Admin` - Authorized member. Set the server-defined group used for future promotions.
+- `/hllvn admin promote eos_id:EOS_ID confirm:false` - Authorized member. Preview granting in-game admin access; use `confirm:true` to apply.
+- `/hllvn admin demote eos_id:EOS_ID confirm:false` - Authorized member. Preview removing in-game admin access; use `confirm:true` to apply.
 - `/hllvn giveseedvip duration:2d` - Authorized member. Reward current players with timed VIP, a private in-game popup, and the organization's BattleMetrics Seeder flag.
 - `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
@@ -71,6 +74,55 @@ administrative access with:
 Only explicitly authorized members and bot owners can then use BattleMetric
 commands, including Server Info setup and modification. Server managers can
 always manage the authorization list, even when they are not themselves on it.
+
+## In-Game Admin Access
+
+Only members authorized through `[p]bm auth add @member` and bot owners can use
+any `/hllvn admin` command. Discord Administrator alone does not grant access.
+Authorization is checked before deferring, reading settings, or contacting RCON.
+These commands manage the game's admin list, not the bot's authorization list,
+Discord roles, or BattleMetrics organization staff.
+
+RCON promotion requires an existing group defined in the game server's
+configuration. Select it for this Discord guild first:
+
+```text
+/hllvn admin group name:Admin
+```
+
+The default is `Admin`. Group names are matched case-insensitively against
+`GetAdminGroups`, preserving the server's spelling; missing or ambiguous groups
+are rejected. Use a group with the intended permissions, not a more privileged
+owner group. Changing this setting does not alter existing admins.
+
+Preview or confirm a specific game account:
+
+```text
+/hllvn admin promote eos_id:EOS_ID confirm:false
+/hllvn admin promote eos_id:EOS_ID confirm:true
+/hllvn admin demote eos_id:EOS_ID confirm:false
+/hllvn admin demote eos_id:EOS_ID confirm:true
+```
+
+`confirm` defaults to `false`. Previews read the server list but never grant or
+remove access. IDs accept the existing 17-digit game-account or 32-character EOS
+format; linking to Discord is not required. Existing admins keep their current
+group when promoted, including more privileged admins. Demoting an account not
+on the admin list is a no-op.
+
+Confirmed requests read, change, and verify the exact account in one shared RCON
+operation under its per-guild lock. A promotion uses `AddAdmin` and a demotion
+uses `RemoveAdmin`; success is reported only after `GetAdminUsers` verifies it.
+Replies are private. An interrupted request or mismatched read-back is not
+automatically retried, because the write may already have changed access. Check
+the game server's admin list before retrying. There is no new poller or
+BattleMetrics API traffic.
+
+The group setting persists in per-guild Red Config. Grants persist in the game
+server's admin list and are not tracked as bot-managed access; bot reloads and
+Red user-data deletion do not revoke them. Use a confirmed demotion to remove
+access. After updating, run `[p]reload BattleMetric` and `[p]slash sync` to expose
+the new subgroup.
 
 ## Server Info Panel
 

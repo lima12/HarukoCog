@@ -101,6 +101,23 @@ Vietnam server's RCON endpoint and feed channel:
 The RCON port may differ from the public game/query port. Kill events are
 queued and pooled into at most one Discord embed every three seconds.
 
+Authorized members can manage in-game admin access using an existing group from
+the game server's configuration:
+
+```text
+/hllvn admin group name:Admin
+/hllvn admin promote eos_id:EOS_ID confirm:false
+/hllvn admin promote eos_id:EOS_ID confirm:true
+/hllvn admin demote eos_id:EOS_ID confirm:true
+```
+
+The group is saved per Discord guild and defaults to `Admin`. Omitted or false
+confirmation is read-only; confirmed changes are verified against the server
+admin list. Existing admin groups are preserved on promotion. All three commands
+require `bm auth` authorization or bot ownership, not Discord Administrator
+alone. They do not change Discord roles or BattleMetrics staff. Reload
+`BattleMetric` and run `[p]slash sync` after updating to expose these commands.
+
 Authorized members can enable two-stage seeding protection for Warfare and
 Offensive. Choose whether offenders receive a configurable 5-30 second warning
 before they are killed or are punished immediately:

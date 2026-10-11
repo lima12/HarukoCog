@@ -10,6 +10,8 @@ from .commands_mixin import BattleMetricCommandsMixin
 from .module import (
     DogTagCommandsMixin,
     DogTagModule,
+    HLLAdminCommandsMixin,
+    HLLAdminModule,
     HLLAdminPingCommandsMixin,
     HLLAdminPingModule,
     HLLBanCommandsMixin,
@@ -51,6 +53,7 @@ class BattleMetric(
     HLLAdminPingCommandsMixin,
     HLLMapCommandsMixin,
     HLLTKWatchCommandsMixin,
+    HLLAdminCommandsMixin,
     HLLSeedingCommandsMixin,
     DogTagCommandsMixin,
     commands.Cog,
@@ -58,7 +61,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.14.1"
+    __version__ = "1.15.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -87,6 +90,7 @@ class BattleMetric(
         self.hll_ban = HLLBanModule(self)
         self.hll_messaging = HLLMessagingModule(self)
         self.hll_maps = HLLMapModule(self)
+        self.hll_admin = HLLAdminModule(self)
         self.admin_ping = HLLAdminPingModule(self)
         self.tk_watch = HLLTKWatchModule(self)
         self.seeding = HLLSeedingModule(self)
@@ -94,6 +98,7 @@ class BattleMetric(
         self.server_info.register_config()
         self.kill_feed.register_config()
         self.hll_vip.register_config()
+        self.hll_admin.register_config()
         self.admin_ping.register_config()
         self.tk_watch.register_config()
         self.seeding.register_config()

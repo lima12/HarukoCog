@@ -2,6 +2,7 @@
 
 from .admin_ping import HLLAdminPingCommandsMixin, HLLAdminPingModule
 from .dog_tags import DogTagCommandsMixin, DogTagModule
+from .hll_admin import HLLAdminCommandsMixin, HLLAdminModule
 from .hll_ban import HLLBanCommandsMixin, HLLBanModule
 from .hll_database import HLLDatabaseCommandsMixin, HLLDatabaseModule
 from .hll_maps import HLLMapCommandsMixin, HLLMapModule
@@ -17,6 +18,8 @@ from .server_info import ServerInfoCommandsMixin, ServerInfoModule
 __all__ = (
     "DogTagCommandsMixin",
     "DogTagModule",
+    "HLLAdminCommandsMixin",
+    "HLLAdminModule",
     "HLLAdminPingCommandsMixin",
     "HLLAdminPingModule",
     "HLLBanCommandsMixin",
