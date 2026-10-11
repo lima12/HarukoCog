@@ -43,6 +43,9 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn mesg target:EOS_ID mesgs:MESSAGE` - Authorized member. Send a private in-game popup directly by game account ID.
 - `/hllvn mesg target:ALL mesgs:MESSAGE` - Authorized member. Send an in-game popup to every connected player.
 - `/hllvn changemap map_name:<map>` - Authorized member. Submit a map change immediately using a specific map/mode or exact server map ID; the game server's countdown still applies.
+- `/hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:true duration_minutes:10` - Authorized member. Schedule in-game voting; omit duration to vote until match end.
+- `/hllvn mapchange sync` - Authorized member. Refresh the bot's cached server rotation without changing existing ballots.
+- `/hllvn mapchange startvote` - Authorized member. Start this match's vote immediately using the saved options and duration settings.
 - `/hllvn admin group name:Admin` - Authorized member. Set the server-defined group used for future promotions.
 - `/hllvn admin groups` - Authorized member. Read available server admin groups and the configured promotion group.
 - `/hllvn admin promote eos_id:EOS_ID confirm:false` - Authorized member. Preview granting in-game admin access; use `confirm:true` to apply.
@@ -504,6 +507,98 @@ the bot does not blindly retry a potentially accepted change.
 
 After updating, run `[p]reload BattleMetric` and `[p]slash sync` to register
 `/hllvn changemap`. No new dependency or stored credential is required.
+
+## In-Game Next-Map Voting
+
+Configure scheduled voting after setting the existing RCON endpoint and vault
+password. An enabled Discord kill-feed channel is not required. All staff
+commands require `bm auth` authorization or bot ownership before any settings or
+RCON access:
+
+```text
+/hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:true duration_minutes:10
+/hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:true
+/hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:false
+/hllvn mapchange sync
+/hllvn mapchange startvote
+```
+
+Start time accepts 0-1440 minutes after an observed match-start event. Duration
+accepts 1-1440 minutes after voting opens; omitting it means until match end.
+Choose 1-5 options. The bot samples unique map/mode IDs from the server rotation,
+excludes the currently running map/mode, and offers fewer options if the rotation
+has fewer alternatives. It never substitutes maps from the full available-map
+catalog. Ties favor the earlier numbered option; zero ballots cause no next-map
+write.
+
+At vote start, one `MessageAllPlayers` request sends the numbered list through
+the game's standard popup. Any player can vote in team/unit chat without Discord
+linking or staff permissions:
+
+```text
+!vote 1
+!vote 2
+!maplist
+```
+
+One ballot is stored per EOS/game account. Voting again changes the selection
+rather than adding another vote. `!maplist` privately reopens the same numbered
+options with current totals. Invalid votes get a private usage response. Repeated
+vote requests are silently throttled for five seconds per account and list
+requests for 30 seconds. Responses and announcements share a bounded delivery
+queue, sending at most one RCON message every three seconds per guild. RCON does
+not expose popup button configuration; the bot cannot require a custom Yes button
+or detect that a player dismissed the popup. See the
+[hllrcon messaging and sequence commands](https://github.com/timraay/hllrcon/blob/master/hllrcon/commands.py).
+
+The rotation is cached in per-guild Red Config on the bot host. It syncs during
+enable/setup, at observed match start, after a detected map change, or manually
+with `/hllvn mapchange sync`. Chat votes and list requests never fetch rotation
+data. Failed syncs leave the last good cache stored but cannot open a new vote
+using another match's cache. Syncing mid-vote updates future eligibility, not
+the displayed option numbers. If an offered map is removed during a manual sync,
+the bot refuses further writes for it. Syncing does not undo a map already queued
+before that removal.
+
+Match-start/end and chat events use the existing shared admin-log poll, not a new
+RCON connection. A 60-second status check catches map changes missed by the log
+stream. If enabled partway through a match without an observed start time, the
+bot waits for the next start event rather than guessing elapsed match time; staff
+can use `startvote` immediately. Only one vote opens per observed match. Manual
+start cannot replace an active or already-finished vote. Configuration changes
+apply to future votes without rewriting a live ballot's options or deadline.
+
+To avoid racing the game's natural transition, the current leader is queued
+while voting remains open. Leader changes are applied at most once every 30
+seconds, with an immediate final check when voting closes. The module uses
+`GetMapSequence`, `MoveMapInSequence`, or `AddMapToSequence`, followed by read-back
+verification under the shared RCON lock. It reorders the upcoming sequence, not
+the rotation template, and never calls `ChangeMap` or ends a live match early.
+The winner is frozen at vote close. Timed votes allow six seconds for the shared
+log poll to deliver pre-deadline ballots; ballots timestamped at or after the
+deadline are rejected. Until-match-end votes close on the end event.
+
+An interrupted sequence write is retried only after re-reading live state, so
+an accepted insertion is not blindly duplicated. Unknown/non-contiguous sequence
+indices, a different current map, or an unverified read-back prevent a success
+announcement. Final writes stop 30 seconds after an observed match end, and old
+votes never intentionally change an already-advanced map. RCON outages or a
+transition that beats the final update can still leave the last queued leader or
+normal server sequence in effect; the bot does not force a replacement map after
+transition. Verify the sequence behavior on your server before relying on it.
+
+Settings, cached rotation, match timestamps, options, ballots keyed by game IDs,
+and queue-verification state persist across reloads. Chat buffers, delivery
+queues, fingerprints, cooldowns, and retry timers are runtime-only and bounded.
+New matches replace old ballots; disabling clears the current vote but does not
+undo a map already queued on the game server. Red user-data deletion removes a
+linked account's ballot before its Discord/EOS link is deleted, including records
+for guilds the bot has left. Unlinked game ballots cannot be resolved from a
+Discord user ID and expire when that guild's next match is observed or voting is
+disabled. No BattleMetrics calls or new secrets are used.
+
+After updating, run `[p]reload BattleMetric` and `[p]slash sync` to register these
+commands. The existing pinned `hllrcon` dependency provides the required methods.
 
 ## Timed HLL VIPs
 

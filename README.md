@@ -121,6 +121,23 @@ require `bm auth` authorization or bot ownership, not Discord Administrator
 alone. They do not change Discord roles or BattleMetrics staff. Reload
 `BattleMetric` and run `[p]slash sync` after updating to expose these commands.
 
+Staff can also configure in-game next-map voting:
+
+```text
+/hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:true duration_minutes:10
+/hllvn mapchange sync
+/hllvn mapchange startvote
+```
+
+Omit `duration_minutes` to vote until match end. Players use `!vote 1-5` in game
+chat and `!maplist` to reopen the same list. Options come from the cached server
+rotation, synced at match start or on staff request, without a rotation request
+for each player. The current map is excluded and each account gets one changeable
+ballot. The leader is queued before transition and finalized at vote close
+without ending the match early. Popups use the game's standard RCON message box;
+its dismissal button cannot be configured by this cog. Staff commands are
+authorized-only. See the cog README for transition safeguards and reload behavior.
+
 Authorized members can enable two-stage seeding protection for Warfare and
 Offensive. Choose whether offenders receive a configurable 5-30 second warning
 before they are killed or are punished immediately:

@@ -10,6 +10,7 @@ from .hll_messaging import HLLMessagingCommandsMixin, HLLMessagingModule
 from .hll_tk_watch import HLLTKWatchCommandsMixin, HLLTKWatchModule
 from .hll_vip import HLLVIPCommandsMixin, HLLVIPModule
 from .kill_feed import KillFeedCommandsMixin, KillFeedModule
+from .map_vote import HLLMapVoteCommandsMixin, HLLMapVoteModule
 from .player_stats import PlayerStatsCommandsMixin, PlayerStatsModule
 from .player_flags import PlayerFlagsModule
 from .seeding import HLLSeedingCommandsMixin, HLLSeedingModule
@@ -38,6 +39,8 @@ __all__ = (
     "HLLVIPModule",
     "KillFeedCommandsMixin",
     "KillFeedModule",
+    "HLLMapVoteCommandsMixin",
+    "HLLMapVoteModule",
     "PlayerStatsCommandsMixin",
     "PlayerStatsModule",
     "PlayerFlagsModule",

@@ -20,6 +20,8 @@ from .module import (
     HLLDatabaseModule,
     HLLMapCommandsMixin,
     HLLMapModule,
+    HLLMapVoteCommandsMixin,
+    HLLMapVoteModule,
     HLLMessagingCommandsMixin,
     HLLMessagingModule,
     HLLSeedingCommandsMixin,
@@ -52,6 +54,7 @@ class BattleMetric(
     HLLMessagingCommandsMixin,
     HLLAdminPingCommandsMixin,
     HLLMapCommandsMixin,
+    HLLMapVoteCommandsMixin,
     HLLTKWatchCommandsMixin,
     HLLAdminCommandsMixin,
     HLLSeedingCommandsMixin,
@@ -61,7 +64,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.15.1"
+    __version__ = "1.16.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -90,6 +93,7 @@ class BattleMetric(
         self.hll_ban = HLLBanModule(self)
         self.hll_messaging = HLLMessagingModule(self)
         self.hll_maps = HLLMapModule(self)
+        self.map_vote = HLLMapVoteModule(self)
         self.hll_admin = HLLAdminModule(self)
         self.admin_ping = HLLAdminPingModule(self)
         self.tk_watch = HLLTKWatchModule(self)
@@ -99,6 +103,7 @@ class BattleMetric(
         self.kill_feed.register_config()
         self.hll_vip.register_config()
         self.hll_admin.register_config()
+        self.map_vote.register_config()
         self.admin_ping.register_config()
         self.tk_watch.register_config()
         self.seeding.register_config()
@@ -119,12 +124,14 @@ class BattleMetric(
             self.tk_watch.ingest_admin_logs,
             self.tk_watch.should_poll,
         )
+        self.kill_feed.register_log_consumer(self.map_vote.ingest_admin_logs, self.map_vote.should_poll)
 
     async def cog_load(self) -> None:
         await self._migrate_legacy_api_token()
         self.api.set_token(await self.get_api_token())
         await self.server_info.start()
         await self.hll_database.start()
+        await self.map_vote.start()
         await self.kill_feed.start()
         await self.hll_vip.start()
         await self.admin_ping.start()
@@ -135,6 +142,7 @@ class BattleMetric(
 
     def cog_unload(self) -> None:
         self.server_info.stop()
+        self.map_vote.stop()
         self.hll_vip.stop()
         self.admin_ping.stop()
         self.hll_messaging.stop()
@@ -146,6 +154,7 @@ class BattleMetric(
         self.bot.loop.create_task(self.api.close())
 
     async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
+        await self.map_vote.delete_user_data(user_id)
         await self.hll_database.delete_user_data(user_id)
         await self.hll_vip.delete_user_data(user_id)
         await self.dog_tags.delete_user_data(user_id)
