@@ -294,7 +294,7 @@ class HLLMapVoteModule:
         for index, (choice, count) in enumerate(zip(state["choices"], counts), 1):
             lines.append(f"{index}. {choice['name'][:120]} ({count} votes)")
         if state["phase"] == "voting":
-            lines.append(f"Type !vote 1-{len(counts)} in team/unit chat. You can change your vote.")
+            lines.append(f'Type "!vote #" to vote in team/unit chat (1-{len(counts)}), e.g. "!vote 1". You can change your vote.')
             lines.append("Type !maplist to see this list again.")
             if state["closes_at"] is None:
                 lines.append("Voting stays open until match end.")

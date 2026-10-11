@@ -532,7 +532,9 @@ catalog. Ties favor the earlier numbered option; zero ballots cause no next-map
 write.
 
 At vote start, one `MessageAllPlayers` request sends the numbered list through
-the game's standard popup. Any player can vote in team/unit chat without Discord
+the game's standard popup, including `Type "!vote #" to vote` and the example
+`"!vote 1"`. The same instructions appear in the `!maplist` popup.
+Any player can vote in team/unit chat without Discord
 linking or staff permissions:
 
 ```text
