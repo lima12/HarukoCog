@@ -58,6 +58,7 @@ class HLLMapVoteModule:
         self._next_message: dict[int, float] = {}
         self._next_event: dict[int, float] = {}
         self._failures: dict[tuple[int, str], int] = {}
+        self._leader_errors: dict[int, str] = {}
 
     def register_config(self) -> None:
         self.cog.config.register_guild(
@@ -97,7 +98,8 @@ class HLLMapVoteModule:
         self.worker.cancel()
         for values in (self._enabled, self._settings, self._states, self._rotations, self._locks,
                        self._events, self._messages, self._seen, self._cooldowns, self._next_status,
-                       self._next_sync, self._next_leader, self._next_message, self._failures):
+                       self._next_sync, self._next_leader, self._next_message, self._failures,
+                       self._leader_errors):
             values.clear()
         self._next_event.clear()
 
@@ -189,6 +191,7 @@ class HLLMapVoteModule:
                 self._next_status[guild.id] = 0
             else:
                 self._enabled.discard(guild.id)
+                self._leader_errors.pop(guild.id, None)
                 self._states[guild.id] = {}
                 self._events.pop(guild.id, None)
                 self._messages.pop(guild.id, None)
@@ -238,6 +241,7 @@ class HLLMapVoteModule:
         }
         self._messages.pop(guild.id, None)
         self._next_leader.pop(guild.id, None)
+        self._leader_errors.pop(guild.id, None)
         self._next_sync.pop(guild.id, None)
         if previous.get("token") != token:
             self._cooldowns = OrderedDict((key, value) for key, value in self._cooldowns.items() if key[0] != guild.id)
@@ -429,24 +433,42 @@ class HLLMapVoteModule:
         if winner not in {entry["id"] for entry in self._rotations.get(guild.id, {}).get("maps", [])}:
             raise MapVoteError("The voted map was removed from the synced rotation.")
 
-        async def operation(client: Any) -> bool:
+        async def operation(client: Any) -> tuple[bool, str | None]:
             session = await client.get_server_session()
             if getattr(session, "map_id", None) != state["map_id"]:
-                return False
+                return False, (
+                    f"Match advanced: recorded_map={state['map_id']}, "
+                    f"live_map={getattr(session, 'map_id', None)}. No map change was submitted."
+                )
             response = await client.get_map_sequence()
-            action, old, new = next_map_plan(response, state["map_id"], winner)
+            # Policy refusals are not transport failures and must not reset shared RCON.
+            try:
+                action, old, new = next_map_plan(response, state["map_id"], winner)
+            except MapVoteError as exc:
+                return False, str(exc)
             if action == "move":
                 await client.move_map_in_sequence(old, new)
             elif action == "add":
                 await client.add_map_to_sequence(winner, new)
             if action != "none":
                 response = await client.get_map_sequence()
-            maps, current = sequence_maps(response)
-            return maps[current].casefold() == state["map_id"].casefold() and maps[(current + 1) % len(maps)].casefold() == winner.casefold()
+            try:
+                maps, current = sequence_maps(response)
+            except MapVoteError as exc:
+                return False, f"Next-map read-back was not verified: {exc}"
+            next_map = maps[(current + 1) % len(maps)]
+            if maps[current].casefold() != state["map_id"].casefold() or next_map.casefold() != winner.casefold():
+                return False, (
+                    f"Next-map read-back mismatch: recorded_map={state['map_id']}, "
+                    f"sequence_current_index={current}, sequence_current_map={maps[current]}, "
+                    f"expected_next_map={winner}, actual_next_map={next_map}."
+                )
+            return True, None
 
-        verified = await self.cog.kill_feed.execute_rcon(guild, "Map-vote next-map sequence update", operation)
+        verified, refusal = await self.cog.kill_feed.execute_rcon(guild, "Map-vote next-map sequence update", operation)
         if not verified:
-            raise MapVoteError("The next-map update was not verified or the match already advanced.")
+            raise MapVoteError(refusal or "The next-map update was not verified.")
+        self._leader_errors.pop(guild.id, None)
         state["queued_winner"] = winner
         if closed:
             state["final_verified"] = True
@@ -466,6 +488,7 @@ class HLLMapVoteModule:
             endpoint = await self._endpoint(guild)
             state = self._states.get(guild.id, {})
             if state and state.get("endpoint") != endpoint:
+                self._leader_errors.pop(guild.id, None)
                 self._states[guild.id] = {}
                 self._events.pop(guild.id, None)
                 self._messages.pop(guild.id, None)
@@ -527,6 +550,12 @@ class HLLMapVoteModule:
                     self._failures.pop((guild.id, "leader"), None)
                 except asyncio.CancelledError:
                     raise
+                except MapVoteError as exc:
+                    self._next_leader[guild.id] = time.monotonic() + self.STATUS_INTERVAL
+                    reason = str(exc)
+                    if self._leader_errors.get(guild.id) != reason:
+                        log.warning("Map-vote update withheld in guild %s: %s Rechecking in 60 seconds.", guild.id, reason)
+                        self._leader_errors[guild.id] = reason
                 except Exception:
                     self._next_leader[guild.id] = time.monotonic() + self._backoff(guild.id, "leader")
                     log.warning("Could not queue map-vote winner in guild %s; will re-read before retry", guild.id, exc_info=True)

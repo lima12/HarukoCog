@@ -55,7 +55,11 @@ def sequence_maps(response: Any) -> tuple[list[str], int]:
 def next_map_plan(response: Any, current_map: str, winner: str) -> tuple[str, int | None, int]:
     maps, current = sequence_maps(response)
     if maps[current].casefold() != current_map.casefold():
-        raise MapVoteError("The match already advanced or the map sequence changed. No map change was submitted.")
+        raise MapVoteError(
+            f"Map-sequence mismatch: recorded_map={current_map}, "
+            f"sequence_current_index={current}, sequence_current_map={maps[current]}. "
+            "No map change was submitted; indices will not be guessed."
+        )
     next_index = (current + 1) % len(maps)
     if len(maps) > 1 and maps[next_index].casefold() == winner.casefold():
         return "none", None, next_index

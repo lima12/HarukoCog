@@ -583,7 +583,15 @@ deadline are rejected. Until-match-end votes close on the end event.
 An interrupted sequence write is retried only after re-reading live state, so
 an accepted insertion is not blindly duplicated. Unknown/non-contiguous sequence
 indices, a different current map, or an unverified read-back prevent a success
-announcement. Final writes stop 30 seconds after an observed match end, and old
+announcement. These safety refusals do not disconnect shared RCON. Ordinary
+retries wait 60 seconds; vote closure requests one final check. An unchanged
+refusal is logged only once until recovery, a new match, or a different reason.
+Map mismatches include the recorded map ID,
+sequence current index, and current map ID in the service log; it never guesses
+another index or forces a map change to bypass a mismatch. An isolated refusal
+can occur during transition. A persistent mismatch needs those diagnostic values
+checked against the live server responses, rather than assuming bad credentials.
+Final writes stop 30 seconds after an observed match end, and old
 votes never intentionally change an already-advanced map. RCON outages or a
 transition that beats the final update can still leave the last queued leader or
 normal server sequence in effect; the bot does not force a replacement map after
