@@ -127,6 +127,7 @@ Staff can also configure in-game next-map voting:
 /hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:true duration_minutes:10
 /hllvn mapchange sync
 /hllvn mapchange startvote
+/hllvn mapchange status
 ```
 
 Omit `duration_minutes` to vote until match end. Players use `!vote 1-5` in game

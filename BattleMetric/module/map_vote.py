@@ -55,6 +55,8 @@ class HLLMapVoteModule:
         self._next_status: dict[int, float] = {}
         self._next_sync: dict[int, float] = {}
         self._next_leader: dict[int, float] = {}
+        self._next_verify: dict[int, float] = {}
+        self._next_diagnostic: dict[int, float] = {}
         self._next_message: dict[int, float] = {}
         self._next_event: dict[int, float] = {}
         self._failures: dict[tuple[int, str], int] = {}
@@ -99,7 +101,7 @@ class HLLMapVoteModule:
         for values in (self._enabled, self._settings, self._states, self._rotations, self._locks,
                        self._events, self._messages, self._seen, self._cooldowns, self._next_status,
                        self._next_sync, self._next_leader, self._next_message, self._failures,
-                       self._leader_errors):
+                       self._leader_errors, self._next_verify, self._next_diagnostic):
             values.clear()
         self._next_event.clear()
 
@@ -196,7 +198,8 @@ class HLLMapVoteModule:
                 self._events.pop(guild.id, None)
                 self._messages.pop(guild.id, None)
                 self._seen.pop(guild.id, None)
-                for timers in (self._next_event, self._next_status, self._next_sync, self._next_leader, self._next_message):
+                for timers in (self._next_event, self._next_status, self._next_sync, self._next_leader,
+                               self._next_message, self._next_verify, self._next_diagnostic):
                     timers.pop(guild.id, None)
                 self._cooldowns = OrderedDict((key, value) for key, value in self._cooldowns.items() if key[0] != guild.id)
                 await self._save(guild)
@@ -230,6 +233,44 @@ class HLLMapVoteModule:
         map_id(getattr(session, "map_id", None))
         return session
 
+    async def status(self, guild: discord.Guild) -> str:
+        async with self._lock(guild.id):
+            now = time.monotonic()
+            if now < self._next_diagnostic.get(guild.id, 0):
+                raise MapVoteError("Please wait 30 seconds before requesting map-vote status again.")
+            self._next_diagnostic[guild.id] = now + 30
+            if guild.id not in self._settings:
+                await self._load(guild)
+            state = self._states.get(guild.id, {})
+
+            async def operation(client: Any) -> tuple[Any, Any]:
+                return await client.get_server_session(), await client.get_map_sequence()
+
+            session, response = await self.cog.kill_feed.execute_rcon(guild, "Map-vote diagnostics", operation)
+            try:
+                live_map = map_id(getattr(session, "map_id", None))
+            except MapVoteError:
+                live_map = "invalid server map ID"
+            try:
+                maps, current = sequence_maps(response)
+                sequence = (f"Sequence current index: {current}\nSequence current map: {maps[current]}\n"
+                            f"Actual next map: {maps[(current + 1) % len(maps)]}")
+            except MapVoteError as exc:
+                sequence = f"Sequence validation: {exc}"
+            choices, votes = state.get("choices", []), state.get("votes", {})
+            winner = state.get("result_winner") if state.get("phase") == "closed" else vote_winner(choices, votes)
+            lines = ["HLLVN MAP VOTE STATUS",
+                     f"Enabled: {self.should_poll(guild.id)} | Phase: {state.get('phase', 'not started')}",
+                     f"Recorded map: {state.get('map_id', 'none')}\nLive map: {live_map}", sequence,
+                     f"Accepted ballots: {sum(vote_counts(choices, votes))}",
+                     f"Vote winner: {winner or 'none'}",
+                     f"Last verified next map: {state.get('queued_winner') or 'none'}",
+                     f"Final check verified: {state.get('final_verified', False)}"]
+            for index, (choice, count) in enumerate(zip(choices, vote_counts(choices, votes)), 1):
+                lines.append(f"{index}. {choice['name'][:120]}: {count} votes")
+            lines.append(f"Last update refusal: {self._leader_errors.get(guild.id, 'none')[:320]}")
+            return "\n".join(lines)[:1900]
+
     async def _new_match(self, guild: discord.Guild, session: Any, started_at: float | None) -> None:
         previous = self._states.get(guild.id, {})
         token = f"{session.map_id}:{started_at if started_at is not None else time.time()}"
@@ -241,6 +282,7 @@ class HLLMapVoteModule:
         }
         self._messages.pop(guild.id, None)
         self._next_leader.pop(guild.id, None)
+        self._next_verify.pop(guild.id, None)
         self._leader_errors.pop(guild.id, None)
         self._next_sync.pop(guild.id, None)
         if previous.get("token") != token:
@@ -424,16 +466,21 @@ class HLLMapVoteModule:
         state = self._states[guild.id]
         closed = state["phase"] == "closed"
         winner = state.get("result_winner") if closed else vote_winner(state["choices"], state["votes"])
-        if winner is None or (closed and state.get("final_verified")):
+        if winner is None:
             return
-        if not closed and winner == state.get("queued_winner"):
+        first_final_check = closed and not state.get("final_verified")
+        if (winner == state.get("queued_winner") and not first_final_check
+                and time.monotonic() < self._next_verify.get(guild.id, 0)):
             return
         if state["ended_at"] is not None and time.time() > state["ended_at"] + 30:
             return
         if winner not in {entry["id"] for entry in self._rotations.get(guild.id, {}).get("maps", [])}:
             raise MapVoteError("The voted map was removed from the synced rotation.")
+        self._next_verify[guild.id] = time.monotonic() + self.STATUS_INTERVAL
+        changed_sequence = False
 
         async def operation(client: Any) -> tuple[bool, str | None]:
+            nonlocal changed_sequence
             session = await client.get_server_session()
             if getattr(session, "map_id", None) != state["map_id"]:
                 return False, (
@@ -451,6 +498,7 @@ class HLLMapVoteModule:
             elif action == "add":
                 await client.add_map_to_sequence(winner, new)
             if action != "none":
+                changed_sequence = True
                 response = await client.get_map_sequence()
             try:
                 maps, current = sequence_maps(response)
@@ -469,11 +517,16 @@ class HLLMapVoteModule:
         if not verified:
             raise MapVoteError(refusal or "The next-map update was not verified.")
         self._leader_errors.pop(guild.id, None)
+        changed_state = winner != state.get("queued_winner") or first_final_check
         state["queued_winner"] = winner
         if closed:
             state["final_verified"] = True
-        await self._save(guild)
-        if state["phase"] == "closed":
+        if changed_state:
+            await self._save(guild)
+        if changed_state or changed_sequence:
+            log.info("Map-vote next map verified in guild %s: winner=%s, ballots=%s, sequence_updated=%s, final=%s",
+                     guild.id, winner, sum(vote_counts(state["choices"], state["votes"])), changed_sequence, closed)
+        if first_final_check:
             self._result_popup(guild.id, state, winner)
 
     def _backoff(self, guild_id: int, stage: str) -> float:
@@ -637,6 +690,8 @@ class HLLMapVoteCommandsMixin:
             elif action == "sync":
                 cache = await self.map_vote.sync(interaction.guild)
                 text = f"Synced {len(cache['maps'])} unique rotation maps. Existing vote options were not changed."
+            elif action == "status":
+                text = await self.map_vote.status(interaction.guild)
             else:
                 state = await self.map_vote.start_vote(interaction.guild)
                 text = f"Map vote started with {len(state['choices'])} options. The in-game popup is queued."
@@ -675,6 +730,11 @@ class HLLMapVoteCommandsMixin:
     @app_commands.guild_only()
     async def hllvn_mapchange_sync(self, interaction: discord.Interaction) -> None:
         await self._mapvote_request(interaction, "sync")
+
+    @hllvn_mapchange.command(name="status", description="Inspect vote totals and the live next-map sequence without changing it.")
+    @app_commands.guild_only()
+    async def hllvn_mapchange_status(self, interaction: discord.Interaction) -> None:
+        await self._mapvote_request(interaction, "status")
 
     @hllvn_mapchange.command(name="startvote", description="Start this match's map vote immediately.")
     @app_commands.guild_only()

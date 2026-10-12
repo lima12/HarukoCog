@@ -46,6 +46,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:true duration_minutes:10` - Authorized member. Schedule in-game voting; omit duration to vote until match end.
 - `/hllvn mapchange sync` - Authorized member. Refresh the bot's cached server rotation without changing existing ballots.
 - `/hllvn mapchange startvote` - Authorized member. Start this match's vote immediately using the saved options and duration settings.
+- `/hllvn mapchange status` - Authorized member. Privately inspect accepted ballots, the winner, recorded/live map IDs, and the actual server next map without changing it.
 - `/hllvn admin group name:Admin` - Authorized member. Set the server-defined group used for future promotions.
 - `/hllvn admin groups` - Authorized member. Read available server admin groups and the configured promotion group.
 - `/hllvn admin promote eos_id:EOS_ID confirm:false` - Authorized member. Preview granting in-game admin access; use `confirm:true` to apply.
@@ -521,6 +522,7 @@ RCON access:
 /hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:false
 /hllvn mapchange sync
 /hllvn mapchange startvote
+/hllvn mapchange status
 ```
 
 Start time accepts 0-1440 minutes after an observed match-start event. Duration
@@ -572,7 +574,15 @@ apply to future votes without rewriting a live ballot's options or deadline.
 
 To avoid racing the game's natural transition, the current leader is queued
 while voting remains open. Leader changes are applied at most once every 30
-seconds, with an immediate final check when voting closes. The module uses
+seconds, with an immediate final check when voting closes. An unchanged leader
+or frozen winner is checked against the live sequence every 60 seconds until
+the match advances (or the final-write window expires). If another integration
+changes the next-map slot during that time, the bot restores the voted winner;
+coordinate external next-map automation to avoid competing writes. A verified,
+unchanged sequence needs no write. Periodic checks never recalculate a frozen
+winner or rebroadcast its result. Successful queue updates and final verification
+are logged at INFO with the winning map and ballot count, not player IDs.
+The module uses
 `GetMapSequence`, `MoveMapInSequence`, or `AddMapToSequence`, followed by read-back
 verification under the shared RCON lock. It reorders the upcoming sequence, not
 the rotation template, and never calls `ChangeMap` or ends a live match early.
@@ -596,6 +606,14 @@ votes never intentionally change an already-advanced map. RCON outages or a
 transition that beats the final update can still leave the last queued leader or
 normal server sequence in effect; the bot does not force a replacement map after
 transition. Verify the sequence behavior on your server before relying on it.
+
+If a recorded vote does not affect the next match, use `/hllvn mapchange status`
+while that match's ballot still exists. It reports accepted ballot counts,
+the current/frozen winner, the last verified map, live session/sequence map IDs,
+the actual next map, and the latest safety refusal. The reply is private, never
+lists voters, does not change settings or the sequence, and uses the shared RCON
+client for two reads. Requests are limited to one per 30 seconds per guild.
+This separates missed chat votes from a server-side sequence update or override.
 
 Settings, cached rotation, match timestamps, options, ballots keyed by game IDs,
 and queue-verification state persist across reloads. Chat buffers, delivery
