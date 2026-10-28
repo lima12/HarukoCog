@@ -490,13 +490,18 @@ the Discord kill feed is disabled because they consume its shared RCON log strea
 The joining player receives a private in-game popup:
 
 ```text
-Welcome to SLH.
+Welcome to SLH, PlayerName
 We tracked your performance
 Kill: 1,234 Confirmed
 Wounded: 56 Times
 Want to show off? Join our Discord at discord.gg/slh4theppl
 You can also customize your own dogtag there!
 ```
+
+`PlayerName` comes from the connection event's in-game name. The test command
+resolves the exact EOS ID against the live RCON player list and uses its current
+in-game name; an offline target receives no test popup. Names are limited to one
+line and 200 characters to keep the popup readable.
 
 Counters come from PostgreSQL `RCON_DATA.Kill` and `RCON_DATA.Dead`, matching
 `/vnstat`'s Confirmed Kills and Wounded Times. They reflect committed database
@@ -532,7 +537,7 @@ delivery for others. RCON failures back off up to 60 seconds; uncertain deliveri
 are not retried because the popup may already have arrived. A successful command
 acknowledgement does not prove the player read it, so test with an online account.
 
-Only the per-guild toggle is saved in Red Config. Pending game IDs, connection-log
+Only the per-guild toggle is saved in Red Config. Pending game IDs, player names, connection-log
 fingerprints (which contain player details), pacing, and deduplication state are
 temporary and cleared on unload. The player's counters are sent only to that
 game account through RCON; a staff test also shows its preview privately in

@@ -29,6 +29,7 @@ log = logging.getLogger("red.BattleMetric.join_notice")
 @dataclass(frozen=True)
 class JoinNotice:
     eos_id: str
+    player_name: str
     endpoint: tuple[str, int]
     ready_at: float
     expires_at: float
@@ -131,13 +132,19 @@ class HLLJoinNoticeModule:
             queue = self._queues.setdefault(guild.id, deque())
             if len(queue) < self.MAX_QUEUE_SIZE:
                 queue.append(JoinNotice(
-                    eos_id, endpoint, now + self.JOIN_DELAY_SECONDS,
+                    eos_id, self._player_name(entry.player_name), endpoint,
+                    now + self.JOIN_DELAY_SECONDS,
                     now + self.MAX_NOTICE_AGE_SECONDS,
                 ))
             else:
                 log.warning("HLL join-notice queue full in guild %s; dropping notice", guild.id)
 
-    async def _message(self, eos_id: str) -> str:
+    @staticmethod
+    def _player_name(value: str) -> str:
+        printable = "".join(char for char in value if char.isprintable() or char.isspace())
+        return " ".join(printable.split())[:200] or "Soldier"
+
+    async def _message(self, eos_id: str, player_name: str) -> str:
         try:
             stats = await asyncio.wait_for(
                 self.cog.hll_database.get_stats_by_eos(eos_id), timeout=15,
@@ -152,16 +159,16 @@ class HLLJoinNoticeModule:
             kills = f"{stats.kills:,}" if stats is not None else "0"
             wounded = f"{stats.deaths:,}" if stats is not None else "0"
         return (
-            "Welcome to SLH.\n"
+            f"Welcome to SLH, {player_name}\n"
             "We tracked your performance\n"
             f"Kill: {kills} Confirmed\n"
             f"Wounded: {wounded} Times\n"
             "Want to show off? Join our Discord at discord.gg/slh4theppl\n"
-            "You can also customize your own dogtag there!"
+            "You can also make your own dogtag there!"
         )
 
-    async def _send(self, guild: discord.Guild, eos_id: str) -> str:
-        message = await self._message(eos_id)
+    async def _send(self, guild: discord.Guild, eos_id: str, player_name: str) -> str:
+        message = await self._message(eos_id, player_name)
         try:
             await self.cog.kill_feed.execute_rcon(
                 guild, "JoinNotice MessagePlayer request",
@@ -189,7 +196,16 @@ class HLLJoinNoticeModule:
             delay = self._next_delivery_at.get(guild.id, 0) - time.monotonic()
             if delay > 0:
                 raise ValueError(f"Join notices are cooling down. Try again in {int(delay) + 1} seconds.")
-            return await self._send(guild, normalized)
+            response = await self.cog.kill_feed.execute_rcon(
+                guild, "JoinNotice GetPlayers request", lambda client: client.get_players(),
+            )
+            player = next((
+                player for player in response.players
+                if HLLBanModule.normalize_eos_id(str(player.id)) == normalized
+            ), None)
+            if player is None:
+                raise ValueError("That EOS ID is not currently online on the configured server.")
+            return await self._send(guild, normalized, self._player_name(player.name))
 
     @tasks.loop(seconds=1)
     async def delivery_worker(self) -> None:
@@ -220,7 +236,7 @@ class HLLJoinNoticeModule:
                     settings = await self.cog.kill_feed.get_settings(guild)
                     if notice.endpoint != (settings.get("host"), settings.get("port")):
                         continue
-                    await self._send(guild, notice.eos_id)
+                    await self._send(guild, notice.eos_id, notice.player_name)
             except asyncio.CancelledError:
                 raise
             except Exception:

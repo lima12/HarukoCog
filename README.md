@@ -261,7 +261,7 @@ intent and Read Message History, alongside its normal send/embed permissions.
 See the [Discord intent guide](https://discordpy.readthedocs.io/en/stable/intents.html#message-content).
 Reload BattleMetric to enable the reply listener; no slash sync is needed.
 
-Players now receive a private welcome popup when they join, with their database
+Players now receive a private welcome popup addressed to their in-game name, with their database
 Confirmed Kills and Wounded Times, the SLH Discord invite, and the custom dog-tag
 invitation. Join notices default to enabled once RCON and database credentials
 are configured. Authorized staff can test an online EOS ID or change the toggle:

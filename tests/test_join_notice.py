@@ -91,7 +91,13 @@ asyncio.run(main())
         self.guild = NS(id=1)
         self.saved = {}
         self.value = NS(set=AsyncMock(side_effect=self.save))
-        self.client = NS(message_player=AsyncMock(return_value=True))
+        self.client = NS(
+            message_player=AsyncMock(return_value=True),
+            get_players=AsyncMock(return_value=NS(players=[
+                NS(id=self.EOS, name="InGame Pilot"),
+                NS(id="a" * 32, name="Hex Pilot"),
+            ])),
+        )
 
         async def execute(guild, stage, operation):
             return await operation(self.client)
@@ -128,6 +134,7 @@ asyncio.run(main())
     def entry(self, eos_id=None, offset=1):
         return Connect(
             player_id=eos_id or self.EOS,
+            player_name="Joining Pilot",
             timestamp=self.module._started_at + timedelta(seconds=offset),
             raw_message=f"CONNECTED {eos_id or self.EOS} {offset}",
         )
@@ -154,6 +161,8 @@ asyncio.run(main())
         self.client.message_player.assert_awaited_once()
         eos_id, message = self.client.message_player.await_args.args
         self.assertEqual(eos_id, self.EOS)
+        self.assertTrue(message.startswith("Welcome to SLH, Joining Pilot\n"))
+        self.client.get_players.assert_not_awaited()
         self.assertIn("Kill: 1,234 Confirmed\nWounded: 56 Times", message)
         self.assertIn("discord.gg/slh4theppl", message)
         self.assertIn("dogtag", message)
@@ -200,7 +209,15 @@ asyncio.run(main())
     async def test_new_player_has_zero_stats_without_a_discord_link(self):
         self.cog.hll_database.get_stats_by_eos.return_value = None
         message = await self.module.test(self.guild, self.EOS)
+        self.assertTrue(message.startswith("Welcome to SLH, InGame Pilot\n"))
         self.assertIn("Kill: 0 Confirmed\nWounded: 0 Times", message)
+
+    async def test_offline_test_target_does_not_send_or_read_database(self):
+        self.client.get_players.return_value = NS(players=[])
+        with self.assertRaisesRegex(ValueError, "not currently online"):
+            await self.module.test(self.guild, self.EOS)
+        self.client.message_player.assert_not_awaited()
+        self.cog.hll_database.get_stats_by_eos.assert_not_awaited()
 
     async def test_database_failure_never_reports_false_zero_counts(self):
         self.cog.hll_database.get_stats_by_eos.side_effect = RuntimeError("private connection data")
@@ -291,6 +308,7 @@ asyncio.run(main())
         self.assertFalse(self.module.enabled(1))
         self.client.message_player.assert_awaited_once()
         self.assertEqual(self.client.message_player.await_args.args[0], "a" * 32)
+        self.assertTrue(self.client.message_player.await_args.args[1].startswith("Welcome to SLH, Hex Pilot\n"))
         self.assertTrue(interaction.followup.send.await_args.kwargs["ephemeral"])
         self.assertEqual(interaction.followup.send.await_args.kwargs["allowed_mentions"].to_dict(), {"parse": []})
 
