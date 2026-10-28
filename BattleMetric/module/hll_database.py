@@ -325,13 +325,16 @@ class HLLDatabaseModule:
 
     async def refresh_server_summary(self) -> HLLServerSummary:
         """Refresh the shared, single-row summary using the existing asyncpg pool."""
+        stage = "acquire"
         try:
             pool = await self.ensure_ready()
             async with pool.acquire(timeout=self.DATABASE_TIMEOUT_SECONDS) as connection:
+                stage = "refresh"
                 await connection.execute(
                     "REFRESH MATERIALIZED VIEW CONCURRENTLY slhhll.mv_server_summary;",
                     timeout=120,
                 )
+                stage = "read"
                 rows = await connection.fetch(
                     "SELECT total_unique_players, total_kills, total_deaths "
                     "FROM slhhll.mv_server_summary LIMIT 2",
@@ -352,10 +355,44 @@ class HLLDatabaseModule:
             # Connection and credential errors already have safe, actionable text.
             raise
         except Exception as exc:
-            raise HLLDatabaseUnavailableError(
-                "The server summary could not be refreshed. Check the materialized "
-                "view, its unique index, and the database role's refresh/read permissions."
-            ) from exc
+            code = getattr(exc, "sqlstate", None)
+            code = code if isinstance(code, str) and re.fullmatch(r"[0-9A-Z]{5}", code) else None
+            log.warning("Discord stats PostgreSQL %s failed (SQLSTATE %s)", stage, code or "unavailable")
+            if code in {"42P01", "3F000"}:
+                message = (
+                    "The summary view or a required database relation could not be found. "
+                    "Check that slhhll.mv_server_summary exists in the configured database."
+                )
+            elif code == "42501":
+                message = (
+                    "The database role lacks permission to refresh or read the summary. "
+                    "Check the view's refresh privilege, SELECT permission, and schema access."
+                )
+            elif code == "55000" and stage == "refresh":
+                message = (
+                    "PostgreSQL could not refresh the summary concurrently because a prerequisite "
+                    "is missing. Check that the populated materialized view has a qualifying "
+                    "unique index covering all rows."
+                )
+            elif code == "0A000" and stage == "refresh":
+                message = (
+                    "PostgreSQL does not support this concurrent summary refresh. Check that "
+                    "slhhll.mv_server_summary is a populated materialized view."
+                )
+            elif code == "42703" and stage == "read":
+                message = (
+                    "The summary view is missing one or more required columns: "
+                    "total_unique_players, total_kills, total_deaths."
+                )
+            elif code in {"57014", "55P03"} or isinstance(exc, TimeoutError):
+                message = "The database summary operation timed out or was cancelled. Check database load and locks."
+            else:
+                suffix = f" (SQLSTATE {code})" if code else ""
+                message = (
+                    f"The database summary {stage} failed{suffix}. "
+                    "Check the database server logs and materialized-view configuration."
+                )
+            raise HLLDatabaseUnavailableError(message) from exc
 
     async def get_stats_by_eos(self, eos_id: str) -> HLLPlayerStats | None:
         pool = await self.ensure_ready()

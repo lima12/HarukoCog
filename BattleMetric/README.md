@@ -142,8 +142,29 @@ the existing database role permission to refresh it and select its counters,
 and create a qualifying UNIQUE index over ordinary columns covering all rows.
 These are requirements of
 [`REFRESH MATERIALIZED VIEW CONCURRENTLY`](https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html).
+PostgreSQL 17 and newer require the view's `MAINTAIN` privilege for refresh;
+PostgreSQL 16 and older require the database role to own the view. The role also
+needs `USAGE` on the schema and `SELECT` on the view. Granting `SELECT` alone
+does not allow a refresh.
 The cog does not create or alter the view or fall back to a blocking refresh.
 Refreshes have a 120-second query timeout; failures retry on the next cycle.
+Manual sync reports a sanitized reason when PostgreSQL supplies a recognizable
+error code; unknown failures include the operation stage and SQLSTATE only.
+For a read-only database-side check, connect to the same database and run:
+
+```sql
+SELECT current_database(), current_user, version(),
+       to_regclass('slhhll.mv_server_summary') AS summary_relation;
+SELECT matviewowner, ispopulated FROM pg_matviews
+WHERE schemaname = 'slhhll' AND matviewname = 'mv_server_summary';
+SELECT indexname, indexdef FROM pg_indexes
+WHERE schemaname = 'slhhll' AND tablename = 'mv_server_summary';
+```
+
+These queries do not change the view. Verify that a qualifying index uses
+ordinary view columns, is unique, and has no WHERE clause. If the view does not
+exist, its owner must provision it with the three documented counters; the cog
+does not know the intended view definition and will not create one automatically.
 
 Per-guild Red Config stores `discord_stats.enabled`, `headcount_id`, `kills_id`,
 `deaths_id`, and recent channel rename cooldown deadlines. No additional personal records or credentials are stored; only
@@ -156,6 +177,7 @@ actual environment.
 
 After adding `sync_now`, reload BattleMetric and run `[p]slash sync` so Discord
 registers the new option.
+Updates to the database diagnostics only require `[p]reload BattleMetric`.
 
 ## In-Game Admin Access
 
