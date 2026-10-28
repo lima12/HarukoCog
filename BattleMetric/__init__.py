@@ -10,7 +10,7 @@ __red_end_user_data_statement__ = (
     "This cog reads global BattleMetrics, HLL RCON, PostgreSQL, and tagweb IPC secrets "
     "from Red's shared API-token storage. It stores settings such as a default server ID, "
     "game filter, Server Info panel IDs, HLL RCON endpoint, kill-feed channel, "
-    "a per-guild Discord stats toggle and three voice channel IDs, "
+    "a per-guild Discord stats toggle, voice channel IDs, and rename cooldown timestamps, "
     "the in-game admin promotion group, "
     "map-vote settings, cached rotation, match timestamps, vote options, "
     "ballots keyed by game account ID, and next-map verification state, "

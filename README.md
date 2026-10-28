@@ -200,11 +200,13 @@ in three existing voice channels:
 
 ```text
 /hllvn discordstat toggle:true headcount_channel:"Head Count" kills_channel:"Kills" deaths_channel:"Deaths"
+/hllvn discordstat sync_now:true
 ```
 
 The bot needs Manage Channels. This command requires Discord Administrator;
 settings persist per guild and updates run every ten minutes, skipping unchanged
-names. The database operator must provision `slhhll.mv_server_summary` with its
+names. `sync_now:true` requests an immediate refresh and reports each result;
+recently renamed channels still observe a ten-minute cooldown. The database operator must provision `slhhll.mv_server_summary` with its
 three counter columns and a qualifying UNIQUE index for concurrent refresh.
 See [voice channel statistics](BattleMetric/README.md#discord-voice-channel-statistics)
 for database permissions and failure behavior. Reload BattleMetric and run

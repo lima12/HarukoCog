@@ -44,7 +44,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn mesg target:ALL mesgs:MESSAGE` - Authorized member. Send an in-game popup to every connected player.
 - `/hllvn joinnotice test:EOS_ID` - Authorized member. Send the join welcome and database counters to an online player.
 - `/hllvn joinnotice toggle:<true|false>` - Authorized member. Control automatic private welcome popups; omit both options to inspect the setting.
-- `/hllvn discordstat [toggle:bool] [headcount_channel:VoiceChannel] [kills_channel:VoiceChannel] [deaths_channel:VoiceChannel]` - Discord Administrator. Configure automatic server totals in three voice channel names; omitted options keep saved settings.
+- `/hllvn discordstat [toggle:bool] [headcount_channel:VoiceChannel] [kills_channel:VoiceChannel] [deaths_channel:VoiceChannel] [sync_now:bool]` - Discord Administrator. Configure automatic server totals and optionally refresh immediately; omitted options keep saved settings.
 - `/hllvn changemap map_name:<map>` - Authorized member. Submit a map change immediately using a specific map/mode or exact server map ID; the game server's countdown still applies.
 - `/hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:true duration_minutes:10` - Authorized member. Schedule in-game voting; omit duration to vote until match end.
 - `/hllvn mapchange sync` - Authorized member. Refresh the bot's cached server rotation without changing existing ballots.
@@ -92,6 +92,7 @@ Configure three existing, distinct voice channels in this guild:
 
 ```text
 /hllvn discordstat toggle:true headcount_channel:"Head Count" kills_channel:"Kills" deaths_channel:"Deaths"
+/hllvn discordstat sync_now:true
 /hllvn discordstat toggle:false
 ```
 
@@ -118,9 +119,20 @@ must return exactly one row with `total_unique_players`, `total_kills`, and
 - `💀 Deaths: 45,678`
 
 After each cycle completes, the worker waits ten minutes before starting another
-cycle to avoid rename bursts after slow requests. Configuration commands only
-save settings; they do not trigger extra refreshes or renames. Each channel is
-edited only when its current name differs. Database failures preserve the last
+cycle to avoid rename bursts after slow requests. Enabling without `sync_now`
+only saves settings, so the first update may wait until the next worker cycle.
+Use `sync_now:true` to refresh the database and attempt updates immediately;
+stats must be enabled. The private reply reports database errors and each
+channel's update, unchanged name, cooldown, or failure. Sync requests serialize
+database refreshes with the worker and recheck that stats are still enabled.
+Manual database refresh attempts are limited to one per 30 seconds across
+guilds; a request during an existing refresh asks the administrator to retry.
+Each changed channel is renamed at most once per ten minutes by this feature,
+including across manual syncs and cog reloads. The cooldown is persisted before
+the request because a lost response may mean Discord applied the rename. A known
+permission or deleted-channel denial releases that cooldown; other failures keep
+it until retry is safe. Each channel is edited only when its current name differs.
+Database failures preserve the last
 names, and deleted channels, permission failures, or Discord HTTP errors do not
 stop future cycles or prevent the remaining channels from being attempted.
 Missing channels are skipped until an administrator selects replacements.
@@ -134,7 +146,7 @@ The cog does not create or alter the view or fall back to a blocking refresh.
 Refreshes have a 120-second query timeout; failures retry on the next cycle.
 
 Per-guild Red Config stores `discord_stats.enabled`, `headcount_id`, `kills_id`,
-and `deaths_id`. No additional personal records or credentials are stored; only
+`deaths_id`, and recent channel rename cooldown deadlines. No additional personal records or credentials are stored; only
 aggregate totals are published in channel names. The worker starts/stops with
 the cog and uses the existing pool's token-refresh and shutdown handling.
 After updating, run `[p]reload BattleMetric`, `[p]slash enablecog BattleMetric`
@@ -142,8 +154,8 @@ if needed, and `[p]slash sync`. Test setup, denial without Administrator,
 unchanged names, a deleted/forbidden channel, and reload persistence in Red's
 actual environment.
 
-After updating this permission diagnostic, reload BattleMetric; slash sync is
-not required because the command's options are unchanged.
+After adding `sync_now`, reload BattleMetric and run `[p]slash sync` so Discord
+registers the new option.
 
 ## In-Game Admin Access
 

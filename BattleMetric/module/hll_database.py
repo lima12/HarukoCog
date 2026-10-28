@@ -337,7 +337,9 @@ class HLLDatabaseModule:
                     "FROM slhhll.mv_server_summary LIMIT 2",
                 )
             if len(rows) != 1:
-                raise ValueError("Expected exactly one server summary row.")
+                raise HLLDatabaseUnavailableError(
+                    "The slhhll.mv_server_summary view must contain exactly one row."
+                )
             row = rows[0]
             return HLLServerSummary(
                 total_unique_players=int(row["total_unique_players"] or 0),
@@ -345,6 +347,9 @@ class HLLDatabaseModule:
                 total_deaths=int(row["total_deaths"] or 0),
             )
         except asyncio.CancelledError:
+            raise
+        except HLLDatabaseUnavailableError:
+            # Connection and credential errors already have safe, actionable text.
             raise
         except Exception as exc:
             raise HLLDatabaseUnavailableError(
