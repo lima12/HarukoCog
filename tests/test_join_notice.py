@@ -1,6 +1,7 @@
 """Join-notice delivery and authorization regressions with fake shared services."""
 
 import importlib.util
+import subprocess
 import sys
 import types
 import unittest
@@ -40,6 +41,50 @@ class Connect(NS):
 @unittest.skipIf(notice is None, "discord.py is required for join-notice tests")
 class JoinNoticeTests(unittest.IsolatedAsyncioTestCase):
     EOS = "76561198000000001"
+
+    def test_full_cog_registers_and_serializes_joinnotice_with_boolean_toggle(self):
+        # A separate interpreter avoids the deliberately isolated module imports
+        # used by the service tests and exercises the real composition root.
+        source = '''
+import asyncio, importlib.util, sys, types
+import discord
+from discord.ext import commands
+if importlib.util.find_spec("redbot") is None:
+    red = types.ModuleType("redbot")
+    core = types.ModuleType("redbot.core")
+    core.commands = commands
+    core.Config = object
+    red.core = core
+    sys.modules["redbot"] = red
+    sys.modules["redbot.core"] = core
+from BattleMetric.battlemetric import BattleMetric
+async def main():
+    # Cog.__new__ performs command copying/binding; no clients or workers start.
+    cog = BattleMetric.__new__(BattleMetric)
+    roots = [cmd for cmd in cog.get_app_commands() if cmd.name == "hllvn"]
+    assert len(roots) == 1, "Expected exactly one /hllvn root"
+    command = roots[0].get_command("joinnotice")
+    assert command is not None, "Join notice missing from the full cog"
+    assert command.binding is cog, "Join notice callback is not bound to the cog"
+    bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+    try:
+        payload = roots[0].to_dict(bot.tree)
+        notice = next(cmd for cmd in payload["options"] if cmd["name"] == "joinnotice")
+        options = {option["name"]: option for option in notice["options"]}
+        assert options["toggle"]["type"] == discord.AppCommandOptionType.boolean.value
+        assert not options["toggle"]["required"]
+        assert options["test"]["type"] == discord.AppCommandOptionType.string.value
+        assert not options["test"]["required"]
+    finally:
+        await bot.close()
+asyncio.run(main())
+'''
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", source],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     async def asyncSetUp(self):
         self.seconds = 100.0

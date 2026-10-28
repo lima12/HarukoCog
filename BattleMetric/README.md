@@ -544,6 +544,31 @@ if needed, and `[p]slash sync`. Verify an authorized test, an unauthorized denia
 a real reconnect, persisted disabling across reload, and an unavailable database
 in the running Red environment.
 
+### If joinnotice does not appear
+
+For a Downloader installation, updating the repository and updating the installed
+cog are separate operations. Run:
+
+```text
+[p]repo update HarukoCog
+[p]cog update BattleMetric
+[p]reload BattleMetric
+[p]slash enablecog BattleMetric
+[p]slash sync
+```
+
+Replace `HarukoCog` with the repository name shown by `[p]repo list` if different.
+`cog update` takes the installed cog name, `BattleMetric`, rather than the
+repository name. For a local `addpath` installation, update the actual directory
+loaded by the running bot, then reload and sync. Updating a different checkout
+does not change the loaded cog.
+
+These commands are registered globally, so use `slash sync` without a guild
+argument. If the updated global command is still hidden in just one server,
+check for an older guild-specific `/hllvn` registration before changing more
+settings. Restarting the Discord client cannot update the code or command payload
+loaded by the bot.
+
 ## Authorized Map Changes
 
 ```text

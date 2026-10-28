@@ -452,5 +452,9 @@ Update the repository and installed cogs with:
 
 ```text
 [p]repo update HarukoCog
-[p]cog update HarukoCog
+[p]cog updateallfromrepos HarukoCog
 ```
+
+To update only BattleMetric, use `[p]cog update BattleMetric`. `repo update`
+refreshes the downloaded repository; it does not update installed cog files.
+After updating, reload the cog and sync any changed application commands.
