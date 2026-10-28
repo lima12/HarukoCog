@@ -88,6 +88,13 @@ class HLLPlayerStats:
     discord_id: int | None
 
 
+@dataclass(frozen=True)
+class HLLServerSummary:
+    total_unique_players: int
+    total_kills: int
+    total_deaths: int
+
+
 class HLLDatabaseModule:
     """Link Discord users to EOS IDs and aggregate RCON combat statistics."""
 
@@ -315,6 +322,35 @@ class HLLDatabaseModule:
         async with pool.acquire() as connection:
             row = await connection.fetchrow(self.STATS_BY_DISCORD_SQL, str(discord_id))
         return self._stats_from_row(row)
+
+    async def refresh_server_summary(self) -> HLLServerSummary:
+        """Refresh the shared, single-row summary using the existing asyncpg pool."""
+        try:
+            pool = await self.ensure_ready()
+            async with pool.acquire(timeout=self.DATABASE_TIMEOUT_SECONDS) as connection:
+                await connection.execute(
+                    "REFRESH MATERIALIZED VIEW CONCURRENTLY slhhll.mv_server_summary;",
+                    timeout=120,
+                )
+                rows = await connection.fetch(
+                    "SELECT total_unique_players, total_kills, total_deaths "
+                    "FROM slhhll.mv_server_summary LIMIT 2",
+                )
+            if len(rows) != 1:
+                raise ValueError("Expected exactly one server summary row.")
+            row = rows[0]
+            return HLLServerSummary(
+                total_unique_players=int(row["total_unique_players"] or 0),
+                total_kills=int(row["total_kills"] or 0),
+                total_deaths=int(row["total_deaths"] or 0),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise HLLDatabaseUnavailableError(
+                "The server summary could not be refreshed. Check the materialized "
+                "view, its unique index, and the database role's refresh/read permissions."
+            ) from exc
 
     async def get_stats_by_eos(self, eos_id: str) -> HLLPlayerStats | None:
         pool = await self.ensure_ready()

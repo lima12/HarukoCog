@@ -8,6 +8,8 @@ from .api import BattleMetricsClient
 from .authorization import BattleMetricAuthorizationError
 from .commands_mixin import BattleMetricCommandsMixin
 from .module import (
+    DiscordStatsCommandsMixin,
+    DiscordStatsModule,
     DogTagCommandsMixin,
     DogTagModule,
     HLLAdminCommandsMixin,
@@ -47,6 +49,7 @@ log = logging.getLogger("red.BattleMetric")
 
 class BattleMetric(
     BattleMetricCommandsMixin,
+    DiscordStatsCommandsMixin,
     ServerInfoCommandsMixin,
     KillFeedCommandsMixin,
     HLLDatabaseCommandsMixin,
@@ -67,7 +70,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.17.1"
+    __version__ = "1.18.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -90,6 +93,7 @@ class BattleMetric(
         self.server_info = ServerInfoModule(self)
         self.kill_feed = KillFeedModule(self)
         self.hll_database = HLLDatabaseModule(self)
+        self.discord_stats = DiscordStatsModule(self)
         self.player_stats = PlayerStatsModule(self)
         self.hll_vip = HLLVIPModule(self)
         self.player_flags = PlayerFlagsModule(self)
@@ -104,6 +108,7 @@ class BattleMetric(
         self.seeding = HLLSeedingModule(self)
         self.dog_tags = DogTagModule(self)
         self.server_info.register_config()
+        self.discord_stats.register_config()
         self.kill_feed.register_config()
         self.join_notice.register_config()
         self.hll_vip.register_config()
@@ -139,6 +144,7 @@ class BattleMetric(
         self.api.set_token(await self.get_api_token())
         await self.server_info.start()
         await self.hll_database.start()
+        await self.discord_stats.start()
         await self.map_vote.start()
         await self.join_notice.start()
         await self.kill_feed.start()
@@ -150,6 +156,7 @@ class BattleMetric(
         await self.dog_tags.start()
 
     def cog_unload(self) -> None:
+        self.discord_stats.stop()
         self.server_info.stop()
         self.map_vote.stop()
         self.join_notice.stop()

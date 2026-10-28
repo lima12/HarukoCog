@@ -44,6 +44,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn mesg target:ALL mesgs:MESSAGE` - Authorized member. Send an in-game popup to every connected player.
 - `/hllvn joinnotice test:EOS_ID` - Authorized member. Send the join welcome and database counters to an online player.
 - `/hllvn joinnotice toggle:<true|false>` - Authorized member. Control automatic private welcome popups; omit both options to inspect the setting.
+- `/hllvn discordstat [toggle:bool] [headcount_channel:VoiceChannel] [kills_channel:VoiceChannel] [deaths_channel:VoiceChannel]` - Discord Administrator. Configure automatic server totals in three voice channel names; omitted options keep saved settings.
 - `/hllvn changemap map_name:<map>` - Authorized member. Submit a map change immediately using a specific map/mode or exact server map ID; the game server's countdown still applies.
 - `/hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:true duration_minutes:10` - Authorized member. Schedule in-game voting; omit duration to vote until match end.
 - `/hllvn mapchange sync` - Authorized member. Refresh the bot's cached server rotation without changing existing ballots.
@@ -81,6 +82,60 @@ administrative access with:
 Only explicitly authorized members and bot owners can then use BattleMetric
 commands, including Server Info setup and modification. Server managers can
 always manage the authorization list, even when they are not themselves on it.
+`/hllvn discordstat` uses Discord Administrator permission instead of `bm auth`,
+as explicitly required for this channel-management command. This permission is
+checked at runtime before deferring or accessing settings; its replies are private.
+
+## Discord Voice Channel Statistics
+
+Configure three existing, distinct voice channels in this guild:
+
+```text
+/hllvn discordstat toggle:true headcount_channel:"Head Count" kills_channel:"Kills" deaths_channel:"Deaths"
+/hllvn discordstat toggle:false
+```
+
+The bot needs **Manage Channels** in each selected voice channel. Enabling
+validates all three saved channels and permissions before saving any changes.
+Omitted options retain their values; omit every option to inspect the settings.
+Disabling retains the channel IDs and their last names. The feature creates no
+channels and does not change their access permissions.
+
+The worker waits for bot readiness, then refreshes
+`slhhll.mv_server_summary` once per cycle through the existing asyncpg pool and
+vaulted `battlemetric_db` credentials. All enabled guilds display the same database
+totals, independently of their configured BattleMetrics/RCON server. The view
+must return exactly one row with `total_unique_players`, `total_kills`, and
+`total_deaths`. Null counters display as zero. The worker formats channel names as:
+
+- `👥 Head Count: 1,234`
+- `⚔️ Kills: 56,789`
+- `💀 Deaths: 45,678`
+
+After each cycle completes, the worker waits ten minutes before starting another
+cycle to avoid rename bursts after slow requests. Configuration commands only
+save settings; they do not trigger extra refreshes or renames. Each channel is
+edited only when its current name differs. Database failures preserve the last
+names, and deleted channels, permission failures, or Discord HTTP errors do not
+stop future cycles or prevent the remaining channels from being attempted.
+Missing channels are skipped until an administrator selects replacements.
+
+The database operator must provision and populate the materialized view, give
+the existing database role permission to refresh it and select its counters,
+and create a qualifying UNIQUE index over ordinary columns covering all rows.
+These are requirements of
+[`REFRESH MATERIALIZED VIEW CONCURRENTLY`](https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html).
+The cog does not create or alter the view or fall back to a blocking refresh.
+Refreshes have a 120-second query timeout; failures retry on the next cycle.
+
+Per-guild Red Config stores `discord_stats.enabled`, `headcount_id`, `kills_id`,
+and `deaths_id`. No additional personal records or credentials are stored; only
+aggregate totals are published in channel names. The worker starts/stops with
+the cog and uses the existing pool's token-refresh and shutdown handling.
+After updating, run `[p]reload BattleMetric`, `[p]slash enablecog BattleMetric`
+if needed, and `[p]slash sync`. Test setup, denial without Administrator,
+unchanged names, a deleted/forbidden channel, and reload persistence in Red's
+actual environment.
 
 ## In-Game Admin Access
 

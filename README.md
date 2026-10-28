@@ -195,6 +195,21 @@ or Team chat. `/vnstat` shows their linked statistics; its optional `member`
 and `eos_id` fields support other-member and direct game-account lookups. See
 the cog README for database constraints and ingestion behavior.
 
+Discord administrators can display database-wide player, kill, and death totals
+in three existing voice channels:
+
+```text
+/hllvn discordstat toggle:true headcount_channel:"Head Count" kills_channel:"Kills" deaths_channel:"Deaths"
+```
+
+The bot needs Manage Channels. This command requires Discord Administrator;
+settings persist per guild and updates run every ten minutes, skipping unchanged
+names. The database operator must provision `slhhll.mv_server_summary` with its
+three counter columns and a qualifying UNIQUE index for concurrent refresh.
+See [voice channel statistics](BattleMetric/README.md#discord-voice-channel-statistics)
+for database permissions and failure behavior. Reload BattleMetric and run
+`[p]slash sync` after updating.
+
 Authorized members can add a timed HLL VIP by linked Discord member or direct
 EOS ID. The duration defaults to one day:
 
