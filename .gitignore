@@ -18,4 +18,4 @@ fp-info-cache
 *.ses
 *.xml
 *.csv
-/tests/*
+/tests/
