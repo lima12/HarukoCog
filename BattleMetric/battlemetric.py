@@ -24,6 +24,8 @@ from .module import (
     HLLMapVoteModule,
     HLLMessagingCommandsMixin,
     HLLMessagingModule,
+    HLLJoinNoticeCommandsMixin,
+    HLLJoinNoticeModule,
     HLLSeedingCommandsMixin,
     HLLSeedingModule,
     HLLTKWatchCommandsMixin,
@@ -52,6 +54,7 @@ class BattleMetric(
     HLLVIPCommandsMixin,
     HLLBanCommandsMixin,
     HLLMessagingCommandsMixin,
+    HLLJoinNoticeCommandsMixin,
     HLLAdminPingCommandsMixin,
     HLLMapCommandsMixin,
     HLLMapVoteCommandsMixin,
@@ -64,7 +67,7 @@ class BattleMetric(
     """BattleMetrics API cog with a reusable async API layer."""
 
     __author__ = "Haruko"
-    __version__ = "1.16.2"
+    __version__ = "1.17.0"
 
     API_SERVICE_NAME = "battlemetrics"
     API_TOKEN_NAME = "api_key"
@@ -92,6 +95,7 @@ class BattleMetric(
         self.player_flags = PlayerFlagsModule(self)
         self.hll_ban = HLLBanModule(self)
         self.hll_messaging = HLLMessagingModule(self)
+        self.join_notice = HLLJoinNoticeModule(self)
         self.hll_maps = HLLMapModule(self)
         self.map_vote = HLLMapVoteModule(self)
         self.hll_admin = HLLAdminModule(self)
@@ -101,6 +105,7 @@ class BattleMetric(
         self.dog_tags = DogTagModule(self)
         self.server_info.register_config()
         self.kill_feed.register_config()
+        self.join_notice.register_config()
         self.hll_vip.register_config()
         self.hll_admin.register_config()
         self.map_vote.register_config()
@@ -125,6 +130,9 @@ class BattleMetric(
             self.tk_watch.should_poll,
         )
         self.kill_feed.register_log_consumer(self.map_vote.ingest_admin_logs, self.map_vote.should_poll)
+        self.kill_feed.register_log_consumer(
+            self.join_notice.ingest_admin_logs, self.join_notice.should_poll,
+        )
 
     async def cog_load(self) -> None:
         await self._migrate_legacy_api_token()
@@ -132,6 +140,7 @@ class BattleMetric(
         await self.server_info.start()
         await self.hll_database.start()
         await self.map_vote.start()
+        await self.join_notice.start()
         await self.kill_feed.start()
         await self.hll_vip.start()
         await self.admin_ping.start()
@@ -143,6 +152,7 @@ class BattleMetric(
     def cog_unload(self) -> None:
         self.server_info.stop()
         self.map_vote.stop()
+        self.join_notice.stop()
         self.hll_vip.stop()
         self.admin_ping.stop()
         self.hll_messaging.stop()

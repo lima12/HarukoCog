@@ -42,6 +42,8 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn mesg target:@member mesgs:MESSAGE` - Authorized member. Send a private in-game popup to a linked member.
 - `/hllvn mesg target:EOS_ID mesgs:MESSAGE` - Authorized member. Send a private in-game popup directly by game account ID.
 - `/hllvn mesg target:ALL mesgs:MESSAGE` - Authorized member. Send an in-game popup to every connected player.
+- `/hllvn joinnotice test:EOS_ID` - Authorized member. Send the join welcome and database counters to an online player.
+- `/hllvn joinnotice toggle:<true|false>` - Authorized member. Control automatic private welcome popups; omit both options to inspect the setting.
 - `/hllvn changemap map_name:<map>` - Authorized member. Submit a map change immediately using a specific map/mode or exact server map ID; the game server's countdown still applies.
 - `/hllvn mapvote vote_start_minutes:20 number_of_options:5 enable:true duration_minutes:10` - Authorized member. Schedule in-game voting; omit duration to vote until match end.
 - `/hllvn mapchange sync` - Authorized member. Refresh the bot's cached server rotation without changing existing ballots.
@@ -475,6 +477,72 @@ the Message Content intent enabled, including the toggle in the Discord
 Developer Portal. See the [Discord intent guide](https://discordpy.readthedocs.io/en/stable/intents.html#message-content).
 The cog does not change gateway intents itself. Run `[p]reload BattleMetric` to
 activate this feature; no new slash command or slash sync is required.
+
+## Player Join Notices
+
+Join notices are enabled by default for guilds with a configured HLL RCON endpoint,
+the vaulted `hllrcon` password, and the existing `battlemetric_db` credentials.
+No BattleMetrics token, Discord account link, or new database migration is needed.
+Only new connection events observed after startup/enabling trigger a popup;
+loading the cog does not greet everyone already online. Notices continue while
+the Discord kill feed is disabled because they consume its shared RCON log stream.
+
+The joining player receives a private in-game popup:
+
+```text
+Welcome to SLH.
+We tracked your performance
+Kill: 1,234 Confirmed
+Wounded: 56 Times
+Want to show off? Join our Discord at discord.gg/slh4theppl
+You can also customize your own dogtag there!
+```
+
+Counters come from PostgreSQL `RCON_DATA.Kill` and `RCON_DATA.Dead`, matching
+`/vnstat`'s Confirmed Kills and Wounded Times. They reflect committed database
+values; pending ingestion may lag slightly, and VIP purchases reduce the stored
+kill balance. A player without a row gets zeroes. A failed database read shows
+`Unavailable` for both counters rather than inventing zeroes.
+
+Staff authorized through `bm auth` and bot owners can use:
+
+```text
+/hllvn joinnotice
+/hllvn joinnotice test:EOS_ID
+/hllvn joinnotice toggle:false
+/hllvn joinnotice toggle:true
+```
+
+Discord requires the lowercase command name `joinnotice`. `test` accepts a
+17-digit or 32-character game identifier and immediately sends the same popup
+to that online player, including while automatic notices are disabled. It
+does not alter the toggle. Set `toggle:true` to enable notices or `toggle:false`
+to disable them; omit it to keep the saved setting. Use test or toggle separately. Command replies and
+authorization denials are ephemeral, and authorization precedes configuration,
+database, and RCON work.
+
+Automatic notices wait five seconds after detection to let the player connect,
+then use the existing serialized RCON client, at most once every two seconds per
+guild. Queues hold at most 200 notices per guild; pending notices expire after
+ten minutes. A bounded fingerprint cache deduplicates overlapping log lookbacks
+and duplicate guild configurations for the same endpoint. Separate reconnect
+events can receive a new welcome. Changing endpoints discards notices for the old
+server. Disabling clears queued notices, and failures in one guild do not stop
+delivery for others. RCON failures back off up to 60 seconds; uncertain deliveries
+are not retried because the popup may already have arrived. A successful command
+acknowledgement does not prove the player read it, so test with an online account.
+
+Only the per-guild toggle is saved in Red Config. Pending game IDs, connection-log
+fingerprints (which contain player details), pacing, and deduplication state are
+temporary and cleared on unload. The player's counters are sent only to that
+game account through RCON; a staff test also shows its preview privately in
+Discord. This feature creates no additional account links or statistic records
+and follows the database module's existing account-deletion behavior.
+
+After updating, run `[p]reload BattleMetric`, `[p]slash enablecog BattleMetric`
+if needed, and `[p]slash sync`. Verify an authorized test, an unauthorized denial,
+a real reconnect, persisted disabling across reload, and an unavailable database
+in the running Red environment.
 
 ## Authorized Map Changes
 

@@ -18,4 +18,5 @@ fp-info-cache
 *.ses
 *.xml
 *.csv
-/tests/
+/tests/*
+!/tests/test_join_notice.py

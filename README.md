@@ -261,6 +261,21 @@ intent and Read Message History, alongside its normal send/embed permissions.
 See the [Discord intent guide](https://discordpy.readthedocs.io/en/stable/intents.html#message-content).
 Reload BattleMetric to enable the reply listener; no slash sync is needed.
 
+Players now receive a private welcome popup when they join, with their database
+Confirmed Kills and Wounded Times, the SLH Discord invite, and the custom dog-tag
+invitation. Join notices default to enabled once RCON and database credentials
+are configured. Authorized staff can test an online EOS ID or change the toggle:
+
+```text
+/hllvn joinnotice test:EOS_ID
+/hllvn joinnotice toggle:false
+/hllvn joinnotice toggle:true
+```
+
+Reload BattleMetric and run `[p]slash sync` after updating. See
+[join notices](BattleMetric/README.md#player-join-notices) for counter semantics,
+delivery pacing, and failure behavior.
+
 Authorized members can request a map change using a map/mode from autocomplete
 or an exact server map ID:
 

@@ -36,6 +36,10 @@ __red_end_user_data_statement__ = (
     "publicly display targets and message text in the Discord command channel; "
     "native admin-reply confirmations also display the replying administrator "
     "in the configured alert channel. "
+    "Join notices store a per-guild toggle and temporarily queue game IDs and "
+    "connection-log fingerprints containing player details in memory. They send "
+    "private welcome popups and database combat counters to the joining game "
+    "account through HLL RCON; authorized tests also show a private Discord preview. "
     "Team-kill alerts retain player details and moderation decisions in their "
     "configured Discord channel after their buttons expire."
 )

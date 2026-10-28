@@ -9,6 +9,7 @@ from .hll_maps import HLLMapCommandsMixin, HLLMapModule
 from .hll_messaging import HLLMessagingCommandsMixin, HLLMessagingModule
 from .hll_tk_watch import HLLTKWatchCommandsMixin, HLLTKWatchModule
 from .hll_vip import HLLVIPCommandsMixin, HLLVIPModule
+from .join_notice import HLLJoinNoticeCommandsMixin, HLLJoinNoticeModule
 from .kill_feed import KillFeedCommandsMixin, KillFeedModule
 from .map_vote import HLLMapVoteCommandsMixin, HLLMapVoteModule
 from .player_stats import PlayerStatsCommandsMixin, PlayerStatsModule
@@ -31,6 +32,8 @@ __all__ = (
     "HLLMapModule",
     "HLLMessagingCommandsMixin",
     "HLLMessagingModule",
+    "HLLJoinNoticeCommandsMixin",
+    "HLLJoinNoticeModule",
     "HLLSeedingCommandsMixin",
     "HLLSeedingModule",
     "HLLTKWatchCommandsMixin",
