@@ -95,8 +95,13 @@ Configure three existing, distinct voice channels in this guild:
 /hllvn discordstat toggle:false
 ```
 
-The bot needs **Manage Channels** in each selected voice channel. Enabling
-validates all three saved channels and permissions before saving any changes.
+The bot needs effective **View Channel**, **Connect**, and **Manage Channels**
+permissions in each selected voice channel. Discord implicitly removes Manage
+Channels from a voice channel when Connect is denied, even if Manage Channels
+is granted by a role or category. You can allow Connect for the bot's role while
+keeping it denied for `@everyone`. Category overrides apply to channels synced
+with that category; an unsynced channel's own overrides can differ. Enabling
+identifies affected channels and missing permissions before saving any changes.
 Omitted options retain their values; omit every option to inspect the settings.
 Disabling retains the channel IDs and their last names. The feature creates no
 channels and does not change their access permissions.
@@ -136,6 +141,9 @@ After updating, run `[p]reload BattleMetric`, `[p]slash enablecog BattleMetric`
 if needed, and `[p]slash sync`. Test setup, denial without Administrator,
 unchanged names, a deleted/forbidden channel, and reload persistence in Red's
 actual environment.
+
+After updating this permission diagnostic, reload BattleMetric; slash sync is
+not required because the command's options are unchanged.
 
 ## In-Game Admin Access
 

@@ -69,12 +69,29 @@ class DiscordStatsModule:
                 ids = [settings[key] for key, _, _ in self.CHANNEL_FORMATS]
                 if None in ids or len(set(ids)) != 3:
                     raise ValueError("Configure three different voice channels before enabling stats.")
+                member = guild.me
+                if member is None:
+                    raise ValueError("I could not resolve my server membership to check channel permissions. Try again shortly.")
+                permission_errors = []
                 for channel_id in ids:
                     channel = guild.get_channel(channel_id)
                     if not isinstance(channel, discord.VoiceChannel):
                         raise ValueError("A configured voice channel is unavailable. Select it again.")
-                    if guild.me is None or not channel.permissions_for(guild.me).manage_channels:
-                        raise ValueError("I need Manage Channels in each configured voice channel.")
+                    permissions = channel.permissions_for(member)
+                    if not permissions.view_channel:
+                        permission_errors.append(f"<#{channel_id}>: View Channel")
+                    elif not permissions.connect:
+                        permission_errors.append(f"<#{channel_id}>: Connect")
+                    elif not permissions.manage_channels:
+                        permission_errors.append(f"<#{channel_id}>: Manage Channels")
+                if permission_errors:
+                    raise ValueError(
+                        "My effective permissions are missing for these voice channels:\n- "
+                        + "\n- ".join(permission_errors)
+                        + "\nAllow the listed permissions for my bot role. Discord also removes "
+                        "Manage Channels in voice channels when Connect is denied. Check each "
+                        "channel's overrides and whether it is synced with its category."
+                    )
             await value.set(settings)
             return settings
 
