@@ -70,8 +70,47 @@ Whitelist a kicked bot, then invite it again:
 /botprotection allow:123456789012345678
 ```
 
+Only members who currently have the configured `notify_role` can use the
+`allow` option. This restriction also applies to server administrators: an
+administrator without that role cannot whitelist a bot. Configuration changes
+still require the **Manage Server** permission.
+
 Disable protection without deleting its configuration or whitelist:
 
 ```text
 /botprotection toggle:false
 ```
+
+The bot-protection command and listeners are kept in
+`modules/bot_protection.py` instead of being added to the main cog file.
+
+## Honeypot
+
+The Discord server owner or a configured Red bot owner can turn a text channel
+into a honeypot. Choose whether a member who posts there is kicked immediately
+or timed out for seven days and then kicked:
+
+```text
+/honeypot trap channel:#do-not-use action:Kick notify_role:@Security
+/honeypot trap channel:#do-not-use action:timeout notify_role:@Security notify_channel:#security-alerts
+```
+
+`notify_channel` is optional and defaults to the trap channel. Members with the
+configured `notify_role` are exempt. Bot messages are also ignored so an alert
+sent into the trap channel cannot trigger the trap again.
+
+For the timeout action, the final kick deadline is stored in Red Config and
+survives cog reloads and bot restarts. If the timeout was a mistake, the server
+owner or Red bot owner can cancel both the timeout and scheduled kick:
+
+```text
+/honeypot release suspect:@member
+```
+
+The bot needs **View Channel** in the trap channel, **View Channel** and **Send
+Messages** in the notification channel, and **Kick Members**. The timeout action
+also requires **Moderate Members**. The notification role must be mentionable
+unless the bot can mention all roles in the notification channel.
+
+The honeypot command, listener, and expiration worker are isolated in
+`modules/honeypot.py`.

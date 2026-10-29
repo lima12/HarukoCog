@@ -434,8 +434,17 @@ available:
 /botprotection allow:123456789012345678
 ```
 
+Server owners and Red bot owners can also configure a channel honeypot. It can
+kick immediately or apply a seven-day timeout followed by a persistent,
+restart-safe kick deadline:
+
+```text
+/honeypot trap channel:#do-not-use action:Kick notify_role:@Security
+/honeypot release suspect:@member
+```
+
 See [HaruAdmins/README.md](HaruAdmins/README.md) for duration formats,
-permissions, renewal behavior, and bot-protection setup.
+permissions, renewal behavior, bot-protection setup, and honeypot behavior.
 
 ## VoiceChannelHandling
 

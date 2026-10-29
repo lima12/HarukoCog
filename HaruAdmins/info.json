@@ -1,11 +1,11 @@
 {
   "author": ["Haruko"],
   "name": "HaruAdmins",
-  "short": "Persistent timeouts and protection from unapproved bots.",
-  "description": "Adds hybrid timeout and bot-protection commands, renews long timeouts, and removes unapproved bots on join.",
-  "install_msg": "HaruAdmins loaded. Use /timeout for member timeouts or /botprotection to configure unapproved-bot removal.",
+  "short": "Persistent timeouts, bot protection, and channel honeypots.",
+  "description": "Adds persistent timeouts, unapproved-bot protection, and owner-managed channel honeypots with kick or timeout-then-kick actions.",
+  "install_msg": "HaruAdmins loaded. Use /timeout, /botprotection, or /honeypot for its moderation features.",
   "requirements": [],
-  "tags": ["admin", "moderation", "timeout", "bot-protection", "security"],
+  "tags": ["admin", "moderation", "timeout", "bot-protection", "honeypot", "security"],
   "min_bot_version": "3.5.0",
-  "end_user_data_statement": "Stores timeout target and moderator Discord IDs, expiration times, and reasons for long timeouts, plus bot-protection role and channel IDs and whitelisted bot IDs."
+  "end_user_data_statement": "Stores timeout target and moderator Discord IDs, expiration times, and reasons for long timeouts; bot-protection role, channel, and whitelisted bot IDs; and honeypot channel, role, suspect, and scheduled-kick data."
 }
