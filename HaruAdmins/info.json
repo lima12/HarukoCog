@@ -1,11 +1,11 @@
 {
   "author": ["Haruko"],
   "name": "HaruAdmins",
-  "short": "Persistent Discord timeouts longer than 28 days.",
-  "description": "Adds a hybrid timeout command and automatically renews long timeouts in Discord-compliant 28-day segments.",
-  "install_msg": "HaruAdmins loaded. Use /timeout with a member, duration, and optional reason.",
+  "short": "Persistent timeouts and protection from unapproved bots.",
+  "description": "Adds hybrid timeout and bot-protection commands, renews long timeouts, and removes unapproved bots on join.",
+  "install_msg": "HaruAdmins loaded. Use /timeout for member timeouts or /botprotection to configure unapproved-bot removal.",
   "requirements": [],
-  "tags": ["admin", "moderation", "timeout"],
+  "tags": ["admin", "moderation", "timeout", "bot-protection", "security"],
   "min_bot_version": "3.5.0",
-  "end_user_data_statement": "Stores the target Discord user ID, moderator Discord user ID, expiration time, and reason for each bot-managed timeout longer than 28 days."
+  "end_user_data_statement": "Stores timeout target and moderator Discord IDs, expiration times, and reasons for long timeouts, plus bot-protection role and channel IDs and whitelisted bot IDs."
 }

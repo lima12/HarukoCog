@@ -417,16 +417,25 @@ authorization details.
 
 ## HaruAdmins
 
-HaruAdmins adds a hybrid timeout command for moderators. Durations longer than
-Discord's 28-day maximum are saved and renewed automatically in 28-day
-segments, including after a bot restart:
+HaruAdmins adds hybrid timeout and bot-protection commands for moderators.
+Timeouts longer than Discord's 28-day maximum are saved and renewed
+automatically in 28-day segments, including after a bot restart:
 
 ```text
 /timeout member:@member duration:30d reason:Repeated rule violations
 ```
 
+It can also immediately kick bots that are not on its persistent whitelist and
+notify a configured staff role, including the inviter when the audit log is
+available:
+
+```text
+/botprotection notify_role:@Server Admin channel:#admin-alerts toggle:true
+/botprotection allow:123456789012345678
+```
+
 See [HaruAdmins/README.md](HaruAdmins/README.md) for duration formats,
-permissions, and renewal behavior.
+permissions, renewal behavior, and bot-protection setup.
 
 ## VoiceChannelHandling
 

@@ -1,7 +1,7 @@
 # HaruAdmins
 
-HaruAdmins provides a hybrid Discord timeout command for Redbot. It supports
-normal Discord timeouts and durations longer than Discord's 28-day maximum.
+HaruAdmins provides hybrid Discord moderation commands for Redbot. It supports
+normal and extended timeouts plus automatic removal of unapproved bots.
 
 ## Install and load
 
@@ -43,3 +43,35 @@ ends. The stored schedule survives cog reloads and bot restarts.
 If a moderator manually removes or changes a managed timeout in Discord,
 HaruAdmins treats that edit as intentional and stops renewing it. Leaving the
 server or reaching the final expiration also removes the stored schedule.
+
+## Bot protection
+
+Configure the role to ping and the text channel where alerts should be sent:
+
+```text
+/botprotection notify_role:@Server Admin channel:#admin-alerts toggle:true
+```
+
+`toggle` defaults to `true`. The bot needs **Kick Members**, **View Channel**,
+and **Send Messages**. The notification role must be mentionable unless the bot
+can mention all roles in the alert channel. **View Audit Log** is optional, but
+without it the alert says `Someone` instead of identifying who added the bot.
+The bot's **Server Members Intent** must also be enabled in Discord's Developer
+Portal so Red receives member-join events.
+
+While enabled, human joins are ignored. A joining bot is allowed only when its
+Discord ID is in the persistent whitelist. All other bots are kicked
+immediately, then the configured role is notified with the bot's name, ID,
+join timestamp, and the inviter when Discord's audit log makes that available.
+
+Whitelist a kicked bot, then invite it again:
+
+```text
+/botprotection allow:123456789012345678
+```
+
+Disable protection without deleting its configuration or whitelist:
+
+```text
+/botprotection toggle:false
+```
