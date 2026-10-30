@@ -553,11 +553,33 @@ class HLLDatabaseModule:
                     exc_info=True,
                 )
             else:
+                message = "Your Discord and HLL accounts are now linked."
+                try:
+                    grant = await self.cog.hll_vip.reward_account_link(
+                        guild, eos_id=str(entry.player_id), discord_id=pending.discord_id,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.warning("Could not confirm account-link VIP reward in guild %s (%s)", guild.id, type(exc).__name__)
+                    message += (
+                        "\nYour 14-day VIP reward could not be confirmed. "
+                        "Run `/link` and verify again to retry, or ask an administrator for help. "
+                        "Your account link was saved successfully."
+                    )
+                else:
+                    if grant is None:
+                        message += "\nThank you for linking! Your one-time linking VIP reward was already claimed; no extra VIP time was added."
+                    else:
+                        message += (
+                            "\nThank you for linking! Enjoy 14 days of VIP on us."
+                            f"\nVIP reward valid until <t:{grant.expires_at}:F>. Existing VIP time is preserved."
+                        )
                 await self._notify_link_result(
                     guild,
                     pending,
                     success=True,
-                    message="Your Discord and HLL accounts are now linked.",
+                    message=message,
                 )
             finally:
                 await self._release_token(token, burn=burn_token)
@@ -809,7 +831,8 @@ class HLLDatabaseCommandsMixin:
             title="Link Your HLL Account",
             description=(
                 f"Send `{token}` in this server's in-game **Unit** or **Team** chat.\n"
-                f"This token expires <t:{expires_unix}:R> and can be used once."
+                f"This token expires <t:{expires_unix}:R> and can be used once.\n"
+                "Your first verified link here includes a one-time 14-day VIP thank-you reward."
             ),
             color=discord.Color.blue(),
         )

@@ -191,8 +191,10 @@ be omitted when unchanged:
 ```
 
 Members can then run `/link` and send the private token in the HLL server's Unit
-or Team chat. `/vnstat` shows their linked statistics; its optional `member`
-and `eos_id` fields support other-member and direct game-account lookups. See
+or Team chat. Their first verified link in that guild grants a one-time 14-day
+in-game VIP reward with a Discord thank-you. Existing VIP time is preserved;
+relinking does not repeatedly add bonuses. `/vnstat` shows their linked statistics;
+its optional `member` and `eos_id` fields support other-member and direct game-account lookups. See
 the cog README for database constraints and ingestion behavior.
 
 Discord administrators can display database-wide player, kill, and death totals
@@ -340,8 +342,8 @@ database deduction is atomic and only commits after the RCON VIP grant is
 accepted.
 
 Authorized members can preview or purge server VIPs that are not tracked by the
-cog. VIPs created by `/hllvn addvip`, `/hllvn buyvip`, or
-`/hllvn giveseedvip` remain protected, and removals are sent through the shared
+cog. VIPs created by `/hllvn addvip`, `/hllvn buyvip`, `/hllvn giveseedvip`, or a
+verified `/link` reward remain protected, and removals are sent through the shared
 RCON connection at one request every two seconds:
 
 ```text

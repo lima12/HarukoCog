@@ -55,7 +55,7 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 - `/hllvn admin promote eos_id:EOS_ID confirm:false` - Authorized member. Preview granting in-game admin access; use `confirm:true` to apply.
 - `/hllvn admin demote eos_id:EOS_ID confirm:false` - Authorized member. Preview removing in-game admin access; use `confirm:true` to apply.
 - `/hllvn giveseedvip duration:2d` - Authorized member. Reward current players with timed VIP, a private in-game popup, and the organization's BattleMetrics Seeder flag.
-- `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by either bot-managed VIP flow.
+- `/hllvn purgevip confirm:false` - Authorized member. Preview server VIPs not tracked by the bot's timed grants or rewards.
 - `/hllvn purgevip confirm:true` - Authorized member. Remove those unmanaged VIPs through throttled RCON requests.
 - `/hllvn allowvipteamswap toggle:<choice>` - Authorized member. Enable or disable the VIP-only in-game `!changeteam` command.
 - `/hllvn adminping role:@role toggle:<choice>` - Authorized member. Configure Discord staff alerts for the in-game `!admin` command.
@@ -936,8 +936,8 @@ bot.
 `/hllvn purgevip` compares the server's current VIP list with all timed grants
 stored by the cog. The default `confirm:false` is a dry run. With `confirm:true`,
 it removes control-panel and other external VIPs while preserving every grant
-tracked by `/hllvn addvip`, `/hllvn buyvip`, or `/hllvn giveseedvip`. Each
-removal is serialized through the same RCON connection lock and spaced two
+tracked by `/hllvn addvip`, `/hllvn buyvip`, `/hllvn giveseedvip`, or a verified
+`/link` reward. Each removal is serialized through the same RCON connection lock and spaced two
 seconds apart; the command does not call BattleMetrics. Failed removals are
 reported once and are not retried in a tight loop.
 
@@ -1140,7 +1140,35 @@ token in Unit or Team chat on the configured HLL server within five minutes.
 The shared RCON poller reads the player ID from the chat event, performs the
 Discord/EOS upsert in a transaction, burns the token, and sends a confirmation
 DM. If DMs are closed, it posts the result in the channel where `/link` was
-used.
+used. After a successful verification, it also grants **14 days of in-game VIP**
+and includes this in the confirmation: "Thank you for linking! Enjoy 14 days of
+VIP on us." `/link` remains public; no `bm auth` authorization is required.
+
+The linking bonus is once per Discord account and once per game account in each
+guild. Verifying again, relinking to another account, replaying chat, or restarting
+the bot does not add another bonus. Members who linked before this feature can
+verify again to claim their first reward; existing links are not mass-rewarded.
+Existing bot-managed VIP time gains 14 days rather than being shortened, and
+the gift uses the normal VIP expiry worker and is protected from `purgevip`.
+Externally managed VIPs keep their original access and gain temporary purge
+protection; expiry never removes their external VIP.
+
+Per-guild Red Config stores `hll_link_vip_rewards` receipts keyed by game ID,
+with the Discord ID, fixed expiry, ownership flag, and completion flag. Receipts
+remain after VIP expiry so that repeating `/link` cannot reclaim the bonus.
+Red user-data deletion removes that user's receipts, while keeping a redacted
+timed grant until normal expiry. No SQL migration or extra secret is needed.
+
+If RCON or Config fails, the Discord link remains saved and the confirmation
+clearly says the VIP reward could not be confirmed. The member can run `/link`
+and verify again to retry. A reserved fixed expiry prevents an interrupted or
+uncertain grant from adding another 14 days on retry; later purchased/admin VIP
+time is never shortened. Rewards are tracked before RCON submission so purge
+and expiry can safely handle an uncertain acknowledgement. There is no automatic
+background retry; if an unconfirmed reward's reserved expiry has already passed,
+staff must review it. Discord delivery failures do not undo a completed reward.
+Run `[p]reload BattleMetric` after updating; the existing command needs no slash
+sync and the receipts are registered automatically.
 
 Player-connect, kill, and death records use the same RCON response as the
 Discord kill feed, so the database module does not open a second RCON
@@ -1155,8 +1183,9 @@ configurations for the same endpoint are deduplicated before queueing. Database
 ingestion continues when the Discord kill feed is disabled, provided the RCON
 endpoint, RCON password, and database credentials are configured.
 
-Account linking only adds the Discord-to-EOS mapping. Existing `RCON_DATA`
-statistics remain intact when a member links, relinks, unlinks, or requests
+Account linking adds the Discord-to-EOS mapping and the one-time VIP reward
+described above. Existing `RCON_DATA` statistics remain intact when a member
+links, relinks, unlinks, or requests
 deletion of their Discord mapping.
 
 ## Player Statistics

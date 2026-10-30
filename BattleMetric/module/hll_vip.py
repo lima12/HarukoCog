@@ -125,6 +125,7 @@ class HLLVIPModule:
     SEED_REWARD_REQUEST_INTERVAL_SECONDS = 2
     TEAM_SWAP_COOLDOWN_SECONDS = 90
     VIP_CACHE_SECONDS = 30
+    LINK_REWARD_SECONDS = 14 * 24 * 60 * 60
     TEAM_SWAP_COMMAND = "!changeteam"
     EOS_PATTERN = re.compile(r"(?:\d{17}|[0-9a-fA-F]{32})")
     DURATION_PATTERN = re.compile(
@@ -173,6 +174,7 @@ class HLLVIPModule:
     def register_config(self) -> None:
         self.cog.config.register_guild(
             hll_vip_grants=[],
+            hll_link_vip_rewards={},
             hll_vip_team_swap_enabled=False,
         )
 
@@ -384,6 +386,79 @@ class HLLVIPModule:
 
         return grant
 
+    async def reward_account_link(
+        self, guild: discord.Guild, *, eos_id: str, discord_id: int,
+    ) -> HLLVIPGrant | None:
+        """Grant one linking bonus per Discord/game account in this guild."""
+        eos_id = self.normalize_eos_id(eos_id)
+        if eos_id is None or self._optional_id(discord_id) is None or self._optional_id(discord_id) != discord_id:
+            raise ValueError("Invalid linked account identity.")
+        async with self._guild_lock(guild.id):
+            config = self.cog.config.guild(guild)
+            receipts = await config.hll_link_vip_rewards()
+            if not isinstance(receipts, dict) or any(
+                not isinstance(key, str) or self.normalize_eos_id(key) != key or not isinstance(row, dict)
+                or self._optional_id(row.get("discord_id")) != row.get("discord_id")
+                or row.get("discord_id") is None
+                or isinstance(row.get("expires_at"), bool) or not isinstance(row.get("expires_at"), int)
+                or not isinstance(row.get("remove_on_expiry"), bool)
+                or not isinstance(row.get("granted"), bool)
+                for key, row in receipts.items()
+            ):
+                raise ValueError("The saved link-reward history needs administrator review.")
+            match = next(((key, row) for key, row in receipts.items()
+                          if key == eos_id or row["discord_id"] == discord_id), None)
+            if match is not None and (match[0] != eos_id or match[1]["discord_id"] != discord_id or match[1]["granted"]):
+                return None
+            grants = await self._get_grants(guild)
+            current = next((grant for grant in grants if grant.eos_id == eos_id), None)
+            now = int(discord.utils.utcnow().timestamp())
+            if match is None:
+                response = await self.cog.kill_feed.execute_rcon(
+                    guild, "Account-link reward VIP snapshot", lambda client: client.get_vip_users(),
+                )
+                entries = getattr(response, "vips", None)
+                if not isinstance(entries, (list, tuple)) or any(
+                    self.normalize_eos_id(str(getattr(entry, "id", ""))) is None for entry in entries
+                ):
+                    raise ValueError("HLL RCON returned an invalid VIP list.")
+                external = any(self.normalize_eos_id(str(entry.id)) == eos_id for entry in entries) and (
+                    current is None or not current.remove_on_expiry
+                )
+                receipt = {
+                    "discord_id": discord_id,
+                    "expires_at": max(now, current.expires_at if current else now) + self.LINK_REWARD_SECONDS,
+                    "remove_on_expiry": not external,
+                    "granted": False,
+                }
+                receipts[eos_id] = receipt
+                # Reserve a fixed expiry before RCON so an uncertain retry cannot add another 14 days.
+                await config.hll_link_vip_rewards.set(receipts)
+            else:
+                receipt = match[1]
+            if receipt["expires_at"] <= now:
+                raise ValueError("The unconfirmed linking reward has expired; ask an administrator for help.")
+            grant = HLLVIPGrant(
+                eos_id=eos_id,
+                expires_at=max(receipt["expires_at"], current.expires_at if current else 0),
+                granted_by=self.cog.bot.user.id,
+                discord_id=discord_id,
+                remove_on_expiry=receipt["remove_on_expiry"] and (
+                    match is None or current is None or current.remove_on_expiry
+                ),
+            )
+            # Track uncertain grants before submission so purge and expiry retain ownership rules.
+            await self._set_grants(guild, [stored for stored in grants if stored.eos_id != eos_id] + [grant])
+            if receipt["remove_on_expiry"]:
+                await self.cog.kill_feed.execute_rcon(
+                    guild, "Account-link reward AddVip request",
+                    lambda client: client.add_vip(eos_id, "HLLVN account-link thank-you reward"),
+                )
+                self._invalidate_vip_cache(guild.id)
+            receipt["granted"] = True
+            await config.hll_link_vip_rewards.set(receipts)
+            return grant
+
     async def give_seed_vip(
         self,
         guild: discord.Guild,
@@ -559,33 +634,38 @@ class HLLVIPModule:
             return grant
 
     async def delete_user_data(self, user_id: int) -> None:
-        for guild_id, guild_data in (await self.cog.config.all_guilds()).items():
-            raw_grants = guild_data.get("hll_vip_grants", [])
-            grants = self._parse_grants(raw_grants)
-            changed = False
-            redacted = []
-            for grant in grants:
-                granted_by = grant.granted_by
-                discord_id = grant.discord_id
-                if granted_by == user_id:
-                    granted_by = None
-                    changed = True
-                if discord_id == user_id:
-                    discord_id = None
-                    changed = True
-                redacted.append(
-                    HLLVIPGrant(
-                        eos_id=grant.eos_id,
-                        expires_at=grant.expires_at,
-                        granted_by=granted_by,
-                        discord_id=discord_id,
-                        remove_on_expiry=grant.remove_on_expiry,
+        for guild_id in await self.cog.config.all_guilds():
+            async with self._guild_lock(guild_id):
+                config = self.cog.config.guild_from_id(guild_id)
+                grants = self._parse_grants(await config.hll_vip_grants())
+                changed = False
+                redacted = []
+                for grant in grants:
+                    granted_by = grant.granted_by
+                    discord_id = grant.discord_id
+                    if granted_by == user_id:
+                        granted_by = None
+                        changed = True
+                    if discord_id == user_id:
+                        discord_id = None
+                        changed = True
+                    redacted.append(
+                        HLLVIPGrant(
+                            eos_id=grant.eos_id,
+                            expires_at=grant.expires_at,
+                            granted_by=granted_by,
+                            discord_id=discord_id,
+                            remove_on_expiry=grant.remove_on_expiry,
+                        )
                     )
-                )
-            if changed:
-                await self.cog.config.guild_from_id(guild_id).hll_vip_grants.set(
-                    [grant.to_config() for grant in redacted]
-                )
+                if changed:
+                    await config.hll_vip_grants.set([grant.to_config() for grant in redacted])
+                receipts = await config.hll_link_vip_rewards()
+                if isinstance(receipts, dict):
+                    retained = {key: row for key, row in receipts.items()
+                                if not isinstance(row, Mapping) or row.get("discord_id") != user_id}
+                    if len(retained) != len(receipts):
+                        await config.hll_link_vip_rewards.set(retained)
 
     @classmethod
     def normalize_eos_id(cls, eos_id: str) -> str | None:
