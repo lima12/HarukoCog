@@ -15,6 +15,8 @@ This keeps endpoint expansion simple: add a method to `BattleMetricsClient`, the
 
 ## Commands
 
+- `/unlink` - Public. Privately remove only your Discord/HLL mapping from the `Discord` table; keep game statistics and VIP access.
+
 - `[p]battlemetric` or `[p]bm` - Authorized member. Show current guild settings.
 - `[p]bm auth add @member` - Server manager or bot owner. Authorize a member to use BattleMetric commands.
 - `[p]bm auth remove @member` - Server manager or bot owner. Revoke a member's authorization.
@@ -1167,8 +1169,47 @@ time is never shortened. Rewards are tracked before RCON submission so purge
 and expiry can safely handle an uncertain acknowledgement. There is no automatic
 background retry; if an unconfirmed reward's reserved expiry has already passed,
 staff must review it. Discord delivery failures do not undo a completed reward.
-Run `[p]reload BattleMetric` after updating; the existing command needs no slash
-sync and the receipts are registered automatically.
+Reward receipts are registered automatically when the cog reloads. Follow the
+reload and slash-sync instructions below to register `/unlink` as well.
+
+Members can run **`/unlink`** to remove their own mapping. It is public, has no
+member/EOS target parameter, and replies privately. Its only data-changing SQL is:
+
+```sql
+DELETE FROM slhhll."Discord"
+WHERE "Discord_Id" = $1
+RETURNING "Discord_Id";
+```
+
+`$1` is always the invoking Discord user's ID, passed as a bound parameter.
+Deleting that row removes both its `Discord_Id` and `EOS_Id` values. It never
+deletes, updates, or truncates `RCON_DATA`; player identities, kills, and deaths
+remain there and ingestion continues. Other users' mappings are untouched.
+The mapping is database-wide, not guild-specific, so unlinking affects all
+guilds using this same database. A repeated unlink safely reports no link.
+
+The transaction takes a per-Discord advisory lock and a non-waiting table lock
+before inspecting the schema. It refuses non-ordinary/inherited mapping tables,
+reverse `RCON_DATA -> Discord` foreign keys, incoming cascade/set-null/set-default
+foreign keys, and enabled custom DELETE triggers/rules on `Discord`. These can
+cause a seemingly targeted delete to affect other data. It does not drop or
+rewrite those database objects; the owner must review custom behavior and apply
+[`sql/hll_constraints.sql`](sql/hll_constraints.sql) where appropriate. The
+catalog checks use PostgreSQL's [constraint metadata](https://www.postgresql.org/docs/current/catalog-pg-constraint.html)
+and [trigger metadata](https://www.postgresql.org/docs/current/catalog-pg-trigger.html).
+
+Unlinking cancels the caller's pending verification tokens across all guilds.
+Verification and unlinking are serialized per Discord account so an old token
+or an in-flight verification cannot silently restore the removed mapping.
+Unlinking does **not** revoke VIP, reset the one-time link-reward receipts, remove
+game-account ballots or aliases, or perform full Red user-data deletion. Use
+`/link` to verify again; stored combat stats are available when relinked, but the
+welcome bonus cannot be claimed again merely by unlinking. The command needs
+only the configured PostgreSQL credentials, not a working RCON connection.
+
+After this update, run `[p]reload BattleMetric` and `[p]slash sync` to register
+`/unlink`. Local tests cover the guarded transaction and concurrency without
+contacting your production database; test the deployed command on a test account.
 
 Player-connect, kill, and death records use the same RCON response as the
 Discord kill feed, so the database module does not open a second RCON

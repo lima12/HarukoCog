@@ -194,8 +194,14 @@ Members can then run `/link` and send the private token in the HLL server's Unit
 or Team chat. Their first verified link in that guild grants a one-time 14-day
 in-game VIP reward with a Discord thank-you. Existing VIP time is preserved;
 relinking does not repeatedly add bonuses. `/vnstat` shows their linked statistics;
-its optional `member` and `eos_id` fields support other-member and direct game-account lookups. See
-the cog README for database constraints and ingestion behavior.
+its optional `member` and `eos_id` fields support other-member and direct
+game-account lookups. See the cog README for database constraints and ingestion
+behavior.
+
+Members can use public `/unlink` to delete only their own Discord/EOS mapping
+from the `Discord` table. `RCON_DATA` identities, kills/deaths, existing VIP,
+and one-time reward history remain unchanged. Reload and slash-sync after
+updating to register the command.
 
 Discord administrators can display database-wide player, kill, and death totals
 in three existing voice channels:

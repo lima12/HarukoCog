@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
+from weakref import WeakValueDictionary
 
 import discord
 from discord import app_commands
@@ -53,6 +54,10 @@ class HLLDatabaseUnavailableError(HLLDatabaseError):
 
 class EOSAccountAlreadyLinkedError(HLLDatabaseError):
     """Raised when an EOS ID belongs to a different Discord account."""
+
+
+class HLLUnsafeUnlinkError(HLLDatabaseError):
+    """Refuse deletion when server-side schema behavior could affect other data."""
 
 
 @dataclass(frozen=True)
@@ -118,6 +123,27 @@ class HLLDatabaseModule:
         "VALUES ($1, $2) "
         'ON CONFLICT ("Discord_Id") DO UPDATE SET "EOS_Id" = EXCLUDED."EOS_Id"'
     )
+    UNLINK_SQL: ClassVar[str] = (
+        'DELETE FROM slhhll."Discord" WHERE "Discord_Id" = $1 RETURNING "Discord_Id"'
+    )
+    UNLINK_UNSAFE_SCHEMA_SQL: ClassVar[str] = """
+        SELECT NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_class
+            WHERE oid = 'slhhll."Discord"'::regclass AND relkind = 'r'
+              AND NOT relhassubclass AND NOT relispartition
+        ) OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_constraint
+            WHERE contype = 'f' AND confrelid = 'slhhll."Discord"'::regclass
+              AND (conrelid = 'slhhll."RCON_DATA"'::regclass OR confdeltype IN ('c', 'n', 'd'))
+        ) OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_trigger
+            WHERE tgrelid = 'slhhll."Discord"'::regclass AND NOT tgisinternal
+              AND tgenabled <> 'D' AND (tgtype & 8) <> 0
+        ) OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_rewrite
+            WHERE ev_class = 'slhhll."Discord"'::regclass AND ev_type = '4' AND ev_enabled <> 'D'
+        )
+    """
     STATS_UPSERT_SQL: ClassVar[str] = (
         'INSERT INTO slhhll."RCON_DATA" ("EOS_Id", "Kill", "Dead") '
         "VALUES ($1, $2, $3) "
@@ -153,6 +179,7 @@ class HLLDatabaseModule:
         self._tokens: dict[str, PendingLink] = {}
         self._claimed_tokens: set[str] = set()
         self._token_lock = asyncio.Lock()
+        self._account_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
         self._stat_queue: asyncio.Queue[StatDelta] = asyncio.Queue(maxsize=self.MAX_QUEUE_SIZE)
         self._stats_task: asyncio.Task[None] | None = None
         self._stats_seen: OrderedDict[str, None] = OrderedDict()
@@ -452,7 +479,7 @@ class HLLDatabaseModule:
     ) -> tuple[str, float]:
         now = time.monotonic()
         expires_at = now + self.TOKEN_TTL_SECONDS
-        async with self._token_lock:
+        async with self._account_lock(discord_id), self._token_lock:
             self._purge_expired_tokens(now)
             for token, pending in list(self._tokens.items()):
                 if pending.discord_id == discord_id and pending.guild_id == guild_id:
@@ -530,59 +557,69 @@ class HLLDatabaseModule:
     async def _handle_chat_entry(self, guild: discord.Guild, entry: Any) -> None:
         tokens = {match.group(0).upper() for match in self.TOKEN_PATTERN.finditer(entry.message)}
         for token in tokens:
-            pending = await self._claim_token(token, guild.id)
-            if pending is None:
+            async with self._token_lock:
+                candidate = self._tokens.get(token)
+            if candidate is None or candidate.guild_id != guild.id:
                 continue
-            burn_token = False
+            async with self._account_lock(candidate.discord_id):
+                pending = await self._claim_token(token, guild.id)
+                if pending is not None:
+                    await self._complete_link(guild, entry, token, pending)
+
+    def _account_lock(self, discord_id: int) -> asyncio.Lock:
+        return self._account_locks.setdefault(discord_id, asyncio.Lock())
+
+    async def _complete_link(self, guild: discord.Guild, entry: Any, token: str, pending: PendingLink) -> None:
+        burn_token = False
+        try:
+            await self._upsert_link(pending.discord_id, str(entry.player_id))
+            burn_token = True
+        except EOSAccountAlreadyLinkedError:
+            burn_token = True
+            await self._notify_link_result(
+                guild,
+                pending,
+                success=False,
+                message="That HLL account is already linked to another Discord account.",
+            )
+        except Exception as exc:
+            log.warning(
+                "Could not store HLL account link for Discord user %s: %s",
+                pending.discord_id,
+                exc,
+                exc_info=True,
+            )
+        else:
+            message = "Your Discord and HLL accounts are now linked."
             try:
-                await self._upsert_link(pending.discord_id, str(entry.player_id))
-                burn_token = True
-            except EOSAccountAlreadyLinkedError:
-                burn_token = True
-                await self._notify_link_result(
-                    guild,
-                    pending,
-                    success=False,
-                    message="That HLL account is already linked to another Discord account.",
+                grant = await self.cog.hll_vip.reward_account_link(
+                    guild, eos_id=str(entry.player_id), discord_id=pending.discord_id,
                 )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                log.warning(
-                    "Could not store HLL account link for Discord user %s: %s",
-                    pending.discord_id,
-                    exc,
-                    exc_info=True,
+                log.warning("Could not confirm account-link VIP reward in guild %s (%s)", guild.id, type(exc).__name__)
+                message += (
+                    "\nYour 14-day VIP reward could not be confirmed. "
+                    "Run `/link` and verify again to retry, or ask an administrator for help. "
+                    "Your account link was saved successfully."
                 )
             else:
-                message = "Your Discord and HLL accounts are now linked."
-                try:
-                    grant = await self.cog.hll_vip.reward_account_link(
-                        guild, eos_id=str(entry.player_id), discord_id=pending.discord_id,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    log.warning("Could not confirm account-link VIP reward in guild %s (%s)", guild.id, type(exc).__name__)
-                    message += (
-                        "\nYour 14-day VIP reward could not be confirmed. "
-                        "Run `/link` and verify again to retry, or ask an administrator for help. "
-                        "Your account link was saved successfully."
-                    )
+                if grant is None:
+                    message += "\nThank you for linking! Your one-time linking VIP reward was already claimed; no extra VIP time was added."
                 else:
-                    if grant is None:
-                        message += "\nThank you for linking! Your one-time linking VIP reward was already claimed; no extra VIP time was added."
-                    else:
-                        message += (
-                            "\nThank you for linking! Enjoy 14 days of VIP on us."
-                            f"\nVIP reward valid until <t:{grant.expires_at}:F>. Existing VIP time is preserved."
-                        )
-                await self._notify_link_result(
-                    guild,
-                    pending,
-                    success=True,
-                    message=message,
-                )
-            finally:
-                await self._release_token(token, burn=burn_token)
+                    message += (
+                        "\nThank you for linking! Enjoy 14 days of VIP on us."
+                        f"\nVIP reward valid until <t:{grant.expires_at}:F>. Existing VIP time is preserved."
+                    )
+            await self._notify_link_result(
+                guild,
+                pending,
+                success=True,
+                message=message,
+            )
+        finally:
+            await self._release_token(token, burn=burn_token)
 
     async def _claim_token(self, token: str, guild_id: int) -> PendingLink | None:
         now = time.monotonic()
@@ -610,6 +647,7 @@ class HLLDatabaseModule:
         pool = await self.ensure_ready()
         discord_id_text = str(discord_id)
         async with pool.acquire() as connection, connection.transaction():
+            await connection.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"discord:{discord_id_text}")
             await connection.execute("SELECT pg_advisory_xact_lock(hashtext($1))", eos_id)
             existing_discord_id = await connection.fetchval(
                 'SELECT "Discord_Id" FROM slhhll."Discord" WHERE "EOS_Id" = $1 LIMIT 1',
@@ -750,26 +788,70 @@ class HLLDatabaseModule:
             ]
             await connection.executemany(self.STATS_UPSERT_SQL, updates)
 
-    async def delete_user_data(self, user_id: int) -> None:
+    async def _cancel_link_tokens(self, user_id: int) -> None:
         async with self._token_lock:
             for token, pending in list(self._tokens.items()):
                 if pending.discord_id == user_id:
                     self._tokens.pop(token, None)
                     self._claimed_tokens.discard(token)
 
-        if not self.has_credentials():
-            return
-        pool = await self.ensure_ready()
-        discord_id = str(user_id)
-        async with pool.acquire() as connection, connection.transaction():
-            await connection.execute(
-                'DELETE FROM slhhll."Discord" WHERE "Discord_Id" = $1',
-                discord_id,
-            )
+    async def unlink_account(self, user_id: int) -> bool:
+        """Delete only this user's Discord mapping; never delete game statistics."""
+        if isinstance(user_id, bool) or not isinstance(user_id, int) or user_id <= 0:
+            raise ValueError("Invalid Discord user ID.")
+        async with self._account_lock(user_id):
+            await self._cancel_link_tokens(user_id)
+            pool = await self.ensure_ready()
+            async with pool.acquire(timeout=self.DATABASE_TIMEOUT_SECONDS) as connection, connection.transaction(isolation="read_committed"):
+                await connection.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"discord:{user_id}")
+                # Keep the catalog check and deletion protected from concurrent schema changes.
+                await connection.execute('LOCK TABLE slhhll."Discord" IN ROW EXCLUSIVE MODE NOWAIT')
+                if await connection.fetchval(self.UNLINK_UNSAFE_SCHEMA_SQL):
+                    raise HLLUnsafeUnlinkError("Account-link dependencies need administrator review before unlinking.")
+                row = await connection.fetchrow(self.UNLINK_SQL, str(user_id))
+            return row is not None
+
+    async def delete_user_data(self, user_id: int) -> None:
+        if self.has_credentials():
+            await self.unlink_account(user_id)
+        else:
+            async with self._account_lock(user_id):
+                await self._cancel_link_tokens(user_id)
 
 
 class HLLDatabaseCommandsMixin:
     """Public account-link command backed by the shared HLL RCON stream."""
+
+    @app_commands.command(name="unlink", description="Remove your Discord/HLL account link without deleting game statistics.")
+    @app_commands.guild_only()
+    async def unlink_hll_account(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await self.hll_database.refresh_settings()
+            removed = await asyncio.wait_for(
+                self.hll_database.unlink_account(interaction.user.id),
+                timeout=self.hll_database.DATABASE_TIMEOUT_SECONDS * 2,
+            )
+        except asyncio.CancelledError:
+            raise
+        except HLLUnsafeUnlinkError:
+            text = (
+                "Unlinking was blocked to protect game statistics. Ask the bot owner to review "
+                "the account-link table, foreign keys, and custom DELETE triggers/rules against the cog's schema migration."
+            )
+        except Exception as exc:
+            log.warning("Account unlink could not be confirmed (%s)", type(exc).__name__)
+            text = "Unlinking could not be confirmed because the database is unavailable or rejected the request. Please try again or contact the bot owner."
+        else:
+            text = (
+                "Your Discord/HLL link was removed."
+                if removed else "You do not have a linked HLL account."
+            )
+            text += " Pending verification tokens were canceled. Your game statistics and existing VIP access were not changed."
+        await interaction.followup.send(text, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
     @app_commands.command(name="link", description="Link your Discord account to your HLL account.")
     @app_commands.guild_only()
